@@ -263,13 +263,8 @@ def setup_model_and_processor(args):
         model.gradient_checkpointing_enable()
         logger.info("Gradient checkpointing enabled")
 
-    # Try to use torch.compile for speedup (PyTorch 2.0+)
-    if hasattr(torch, 'compile') and not args.no_compile:
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-            logger.info("torch.compile enabled (reduce-overhead mode)")
-        except Exception as e:
-            logger.warning(f"torch.compile failed: {e}")
+    # Note: torch.compile is incompatible with PEFT + HF Trainer
+    # Skip torch.compile when using LoRA to avoid '_orig_mod' error
 
     # Add LoRA if available
     if PEFT_AVAILABLE and args.use_lora:
