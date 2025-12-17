@@ -211,11 +211,12 @@ def collate_fn(batch):
         padded_batch['pixel_values'].append(item['pixel_values'])
 
     # Stack - only model-compatible keys
+    # Convert pixel_values to bfloat16 to match model dtype
     result = {
         'input_ids': torch.stack(padded_batch['input_ids']),
         'attention_mask': torch.stack(padded_batch['attention_mask']),
         'labels': torch.stack(padded_batch['labels']),
-        'pixel_values': torch.stack(padded_batch['pixel_values']),
+        'pixel_values': torch.stack(padded_batch['pixel_values']).to(torch.bfloat16),
     }
 
     return result
