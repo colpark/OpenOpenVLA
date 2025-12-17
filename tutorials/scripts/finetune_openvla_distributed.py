@@ -248,12 +248,14 @@ def setup_model_and_processor(args):
     )
 
     # Load model with proper dtype
+    # Use attn_implementation="eager" to avoid SDPA compatibility issues with custom models
     model = AutoModelForVision2Seq.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         cache_dir=f"{CACHE_DIR}/huggingface",
         low_cpu_mem_usage=True,
+        attn_implementation="eager",  # Avoid _supports_sdpa error with newer transformers
     )
 
     # Enable gradient checkpointing for memory efficiency
