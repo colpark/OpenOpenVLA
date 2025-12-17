@@ -263,6 +263,14 @@ def setup_model_and_processor(args):
         model.gradient_checkpointing_enable()
         logger.info("Gradient checkpointing enabled")
 
+    # Try to use torch.compile for speedup (PyTorch 2.0+)
+    if hasattr(torch, 'compile') and not args.no_compile:
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            logger.info("torch.compile enabled (reduce-overhead mode)")
+        except Exception as e:
+            logger.warning(f"torch.compile failed: {e}")
+
     # Add LoRA if available
     if PEFT_AVAILABLE and args.use_lora:
         logger.info("Adding LoRA adapters...")
@@ -312,8 +320,8 @@ def main():
     # Data arguments
     parser.add_argument("--max-samples", type=int, default=None,
                         help="Max samples for debugging")
-    parser.add_argument("--num-workers", type=int, default=4,
-                        help="DataLoader workers")
+    parser.add_argument("--num-workers", type=int, default=8,
+                        help="DataLoader workers (increase for faster data loading)")
 
     # Output arguments
     parser.add_argument("--output-dir", type=str, default=OUTPUT_DIR,
@@ -329,10 +337,22 @@ def main():
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
 
+    # Performance arguments
+    parser.add_argument("--no-compile", action="store_true",
+                        help="Disable torch.compile")
+    parser.add_argument("--tf32", action="store_true", default=True,
+                        help="Enable TF32 for faster matmul on Ampere/Hopper GPUs")
+
     args = parser.parse_args()
 
     # Set seed
     set_seed(args.seed)
+
+    # Enable TF32 for faster matmul on H100/A100
+    if args.tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("TF32 enabled for faster matmul")
 
     # Initialize accelerator
     accelerator = Accelerator(
