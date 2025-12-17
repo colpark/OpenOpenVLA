@@ -46,6 +46,14 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
+# Check for Flash Attention 2 (major speedup on H100s)
+FLASH_ATTN_AVAILABLE = False
+try:
+    import flash_attn
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    pass
+
 # ============================================================
 # Configuration (auto-detect NERSC vs SciServer)
 # ============================================================
@@ -318,15 +326,23 @@ def setup_model_and_processor(args):
         cache_dir=f"{CACHE_DIR}/huggingface",
     )
 
-    # Load model with proper dtype
-    # Use attn_implementation="eager" to avoid SDPA compatibility issues with custom models
+    # Load model with proper dtype and optimized attention
+    # Priority: flash_attention_2 (fastest) > sdpa (PyTorch native) > eager (slow fallback)
+    if FLASH_ATTN_AVAILABLE:
+        attn_impl = "flash_attention_2"
+        logger.info("Using Flash Attention 2 (fastest)")
+    else:
+        attn_impl = "eager"  # sdpa has compatibility issues with OpenVLA's custom model
+        logger.info("Flash Attention not available - using eager attention (slower)")
+        logger.info("Install flash-attn for ~2x speedup: pip install flash-attn --no-build-isolation")
+
     model = AutoModelForVision2Seq.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         cache_dir=f"{CACHE_DIR}/huggingface",
         low_cpu_mem_usage=True,
-        attn_implementation="eager",  # Avoid _supports_sdpa error with newer transformers
+        attn_implementation=attn_impl,
     )
 
     # Enable gradient checkpointing for memory efficiency
@@ -379,8 +395,8 @@ def main():
                         help="LoRA dropout")
 
     # Training arguments
-    parser.add_argument("--batch-size", type=int, default=16,
-                        help="Per-device batch size (16-24 fits on 80GB GPU)")
+    parser.add_argument("--batch-size", type=int, default=32,
+                        help="Per-device batch size (32 fits on 80GB H100 with gradient checkpointing)")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
                         help="Gradient accumulation steps (1 = disabled, use higher batch size instead)")
     parser.add_argument("--learning-rate", type=float, default=5e-4,
