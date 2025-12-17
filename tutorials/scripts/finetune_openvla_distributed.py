@@ -476,7 +476,7 @@ def main():
         dataloader_pin_memory=True,
         remove_unused_columns=False,
         report_to="tensorboard",
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=True,  # Required for LoRA - most params are frozen
     )
 
     # Create trainer
