@@ -7,55 +7,60 @@
 set -e
 
 # ============================================================
-# Configuration
+# Configuration - HARDCODED PATHS (no variables that might be empty)
 # ============================================================
-export SCRATCH="/home/idies/workspace/Temporary/dpark1/scratch"
-export CONDA_ENVS="${SCRATCH}/conda/conda_envs"
-export CONDA_PKGS="${SCRATCH}/conda/conda_pkgs"
-export CACHE_DIR="${SCRATCH}/.cache"
-export ENV_NAME="openvla"
-
-# Create directories
-mkdir -p ${CONDA_ENVS}
-mkdir -p ${CONDA_PKGS}
-mkdir -p ${CACHE_DIR}/huggingface
-mkdir -p ${CACHE_DIR}/torch
-mkdir -p ${SCRATCH}/libero_data
-mkdir -p ${SCRATCH}/openvla_finetune
+SCRATCH="/home/idies/workspace/Temporary/dpark1/scratch"
+CONDA_ENVS="${SCRATCH}/conda/conda_envs"
+CONDA_PKGS="${SCRATCH}/conda/conda_pkgs"
+CACHE_DIR="${SCRATCH}/.cache"
+ENV_NAME="openvla"
 
 echo "============================================================"
 echo "OpenVLA Setup for SciServer"
 echo "============================================================"
-echo "Base directory: ${SCRATCH}"
-echo "Conda envs: ${CONDA_ENVS}"
-echo "Cache: ${CACHE_DIR}"
+echo "SCRATCH: ${SCRATCH}"
+echo "CONDA_ENVS: ${CONDA_ENVS}"
+echo "CACHE_DIR: ${CACHE_DIR}"
 echo ""
+
+# Verify SCRATCH exists
+if [ ! -d "${SCRATCH}" ]; then
+    echo "ERROR: SCRATCH directory does not exist: ${SCRATCH}"
+    echo "Please create it first: mkdir -p ${SCRATCH}"
+    exit 1
+fi
+
+# Create directories
+mkdir -p "${CONDA_ENVS}"
+mkdir -p "${CONDA_PKGS}"
+mkdir -p "${CACHE_DIR}/huggingface"
+mkdir -p "${CACHE_DIR}/torch"
+mkdir -p "${SCRATCH}/libero_data"
+mkdir -p "${SCRATCH}/openvla_finetune"
 
 # ============================================================
 # Step 1: Configure Conda
 # ============================================================
 echo "Step 1: Configuring Conda..."
 
-# Set conda to use scratch for packages
-conda config --add pkgs_dirs ${CONDA_PKGS}
-conda config --add envs_dirs ${CONDA_ENVS}
+conda config --add pkgs_dirs "${CONDA_PKGS}"
+conda config --add envs_dirs "${CONDA_ENVS}"
 
 # ============================================================
 # Step 2: Create Environment
 # ============================================================
 echo "Step 2: Creating conda environment..."
 
-# Check if environment exists
 if conda env list | grep -q "^${ENV_NAME} "; then
-    echo "Environment ${ENV_NAME} already exists. Activating..."
+    echo "Environment ${ENV_NAME} already exists."
 else
     echo "Creating new environment: ${ENV_NAME}"
-    conda create -n ${ENV_NAME} python=3.10 -y
+    conda create -n "${ENV_NAME}" python=3.10 -y
 fi
 
 # Activate environment
-source $(conda info --base)/etc/profile.d/conda.sh
-conda activate ${ENV_NAME}
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "${ENV_NAME}"
 
 echo "Python: $(which python)"
 echo "Python version: $(python --version)"
@@ -65,10 +70,8 @@ echo "Python version: $(python --version)"
 # ============================================================
 echo "Step 3: Installing PyTorch for CUDA 12.4..."
 
-# PyTorch 2.4+ supports CUDA 12.4
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# Verify CUDA
 python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
 
 # ============================================================
@@ -90,22 +93,31 @@ pip install matplotlib
 pip install tqdm
 pip install h5py
 pip install tensorboard
+pip install jupyter jupyterlab
 
-# Flash Attention 2 for H100 (significant speedup)
-echo "Installing Flash Attention 2..."
-pip install flash-attn --no-build-isolation
+# Flash Attention (optional - skip if CUDA_HOME not set)
+echo "Checking for Flash Attention prerequisites..."
+if [ -n "${CUDA_HOME}" ] && command -v nvcc &> /dev/null; then
+    echo "Installing Flash Attention 2..."
+    pip install flash-attn --no-build-isolation || echo "Flash Attention installation failed - continuing without it"
+else
+    echo "CUDA_HOME not set or nvcc not found - skipping Flash Attention"
+    echo "Training will work but may be slower on H100s"
+fi
 
 # ============================================================
 # Step 5: Install LIBERO
 # ============================================================
 echo "Step 5: Installing LIBERO..."
 
-# Clone LIBERO if not exists
-if [ ! -d "${SCRATCH}/LIBERO" ]; then
-    git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git ${SCRATCH}/LIBERO
+LIBERO_DIR="${SCRATCH}/LIBERO"
+
+if [ ! -d "${LIBERO_DIR}" ]; then
+    echo "Cloning LIBERO repository..."
+    git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git "${LIBERO_DIR}"
 fi
 
-cd ${SCRATCH}/LIBERO
+cd "${LIBERO_DIR}"
 pip install -e .
 
 # Install robosuite (LIBERO dependency)
@@ -118,7 +130,7 @@ echo "Step 6: Configuring LIBERO..."
 
 mkdir -p ~/.libero
 cat > ~/.libero/config.yaml << EOF
-bddl_files: ${SCRATCH}/LIBERO/libero/libero/bddl_files
+bddl_files: ${LIBERO_DIR}/libero/libero/bddl_files
 datasets: ${SCRATCH}/libero_data
 EOF
 
@@ -126,41 +138,38 @@ echo "LIBERO config:"
 cat ~/.libero/config.yaml
 
 # ============================================================
-# Step 7: Set Environment Variables
+# Step 7: Set Environment Variables (in user's bashrc)
 # ============================================================
 echo "Step 7: Setting environment variables..."
 
-# Create activation script
-cat > ${CONDA_ENVS}/${ENV_NAME}/etc/conda/activate.d/env_vars.sh << EOF
-#!/bin/bash
+# Add to bashrc for persistence
+cat >> ~/.bashrc << EOF
+
+# OpenVLA Environment Variables (added by setup script)
 export SCRATCH="${SCRATCH}"
 export HF_HOME="${CACHE_DIR}/huggingface"
 export TORCH_HOME="${CACHE_DIR}/torch"
 export XDG_CACHE_HOME="${CACHE_DIR}"
 export TRANSFORMERS_CACHE="${CACHE_DIR}/huggingface/transformers"
 export HF_DATASETS_CACHE="${CACHE_DIR}/huggingface/datasets"
-
-# Suppress TensorFlow warnings
 export TF_CPP_MIN_LOG_LEVEL=3
-
-# NCCL settings for multi-GPU
-export NCCL_DEBUG=WARN
-export NCCL_P2P_DISABLE=0
-export NCCL_IB_DISABLE=0
 EOF
 
-mkdir -p ${CONDA_ENVS}/${ENV_NAME}/etc/conda/activate.d
-chmod +x ${CONDA_ENVS}/${ENV_NAME}/etc/conda/activate.d/env_vars.sh
+# Source them now
+export SCRATCH="${SCRATCH}"
+export HF_HOME="${CACHE_DIR}/huggingface"
+export TORCH_HOME="${CACHE_DIR}/torch"
+export XDG_CACHE_HOME="${CACHE_DIR}"
+export TF_CPP_MIN_LOG_LEVEL=3
 
-# Source it now
-source ${CONDA_ENVS}/${ENV_NAME}/etc/conda/activate.d/env_vars.sh
+echo "Environment variables added to ~/.bashrc"
 
 # ============================================================
 # Step 8: Download LIBERO Assets
 # ============================================================
 echo "Step 8: Downloading LIBERO assets..."
 
-python << 'PYEOF'
+python << PYEOF
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -180,10 +189,10 @@ PYEOF
 # ============================================================
 echo "Step 9: Downloading LIBERO demonstration data..."
 
-cd ${SCRATCH}/LIBERO
+cd "${LIBERO_DIR}"
 python benchmark_scripts/download_libero_datasets.py \
-    --download-dir ${SCRATCH}/libero_data \
-    --datasets libero_spatial
+    --download-dir "${SCRATCH}/libero_data" \
+    --datasets libero_spatial || echo "Demo download failed - you can download manually later"
 
 # ============================================================
 # Step 10: Verify Installation
@@ -193,7 +202,7 @@ echo "============================================================"
 echo "Verification"
 echo "============================================================"
 
-python << 'PYEOF'
+python << PYEOF
 import sys
 print(f"Python: {sys.executable}")
 
@@ -223,7 +232,7 @@ try:
     import flash_attn
     print(f"Flash Attention: {flash_attn.__version__}")
 except:
-    print("Flash Attention: Not installed")
+    print("Flash Attention: Not installed (optional)")
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -235,8 +244,7 @@ except Exception as e:
 
 # Check for demo files
 from pathlib import Path
-scratch = os.environ.get('SCRATCH', '/home/idies/workspace/Temporary/dpark1/scratch')
-hdf5_files = list(Path(f"{scratch}/libero_data").rglob("*.hdf5"))
+hdf5_files = list(Path("${SCRATCH}/libero_data").rglob("*.hdf5"))
 print(f"LIBERO demo files: {len(hdf5_files)} found")
 PYEOF
 
