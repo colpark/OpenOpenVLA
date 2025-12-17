@@ -169,18 +169,43 @@ class OpenVLAPolicy:
     Policy wrapper for OpenVLA inference in LIBERO.
     """
 
-    def __init__(self, model, processor, device="cuda:0", unnorm_key=None):
+    # Action token IDs in OpenVLA vocabulary (256 bins per dimension)
+    ACTION_TOKEN_BEGIN = 32000  # Start of action tokens in vocabulary
+
+    def __init__(self, model, processor, device="cuda:0", unnorm_key=None, use_raw_actions=True):
         self.model = model
         self.processor = processor
         self.device = device
         self.unnorm_key = unnorm_key
+        self.use_raw_actions = use_raw_actions  # Skip unnormalization for fine-tuned models
+
+    def decode_actions_raw(self, action_token_ids, action_dim=7):
+        """
+        Decode action tokens to continuous values WITHOUT unnormalization.
+        Actions are decoded to [-1, 1] range directly from token bins.
+
+        Args:
+            action_token_ids: Token IDs from model generation
+            action_dim: Number of action dimensions (default 7 for LIBERO)
+
+        Returns:
+            numpy array of continuous actions in [-1, 1]
+        """
+        # Convert token IDs to bin indices (0-255)
+        action_tokens = action_token_ids - self.ACTION_TOKEN_BEGIN
+
+        # Convert bin indices to continuous values in [-1, 1]
+        # OpenVLA uses 256 bins, so bin 0 = -1, bin 255 = 1
+        actions = (action_tokens.cpu().numpy() / 255.0) * 2 - 1
+
+        return actions[:action_dim]
 
     def predict(self, obs, instruction):
         """
         Predict action from observation and instruction.
 
         Args:
-            obs: Dictionary with 'agentview_rgb' key containing image
+            obs: Dictionary with image observation
             instruction: Natural language task instruction
 
         Returns:
@@ -227,14 +252,25 @@ class OpenVLAPolicy:
 
         # Predict action
         with torch.no_grad():
-            action = self.model.predict_action(
-                **inputs,
-                unnorm_key=self.unnorm_key,
-                do_sample=False,
-            )
-
-        # Post-process action
-        action = np.array(action)
+            if self.use_raw_actions:
+                # Generate action tokens directly and decode without unnormalization
+                # This is better for fine-tuned models on new datasets
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=7,  # 7 action dimensions
+                    do_sample=False,
+                )
+                # Extract action tokens (last 7 tokens)
+                action_token_ids = generated_ids[0, -7:]
+                action = self.decode_actions_raw(action_token_ids)
+            else:
+                # Use OpenVLA's predict_action with unnormalization
+                action = self.model.predict_action(
+                    **inputs,
+                    unnorm_key=self.unnorm_key,
+                    do_sample=False,
+                )
+                action = np.array(action)
 
         # Invert gripper for LIBERO convention
         if len(action) >= 7:
@@ -389,14 +425,20 @@ def main():
                         help="Output JSON file for results")
     parser.add_argument("--unnorm-key", type=str, default="bridge_orig",
                         help="Unnormalization key for action decoding (default: bridge_orig)")
+    parser.add_argument("--raw-actions", action="store_true", default=True,
+                        help="Use raw action decoding without unnormalization (recommended for fine-tuned models)")
+    parser.add_argument("--no-raw-actions", action="store_false", dest="raw_actions",
+                        help="Use OpenVLA's unnormalization (for base model evaluation)")
 
     args = parser.parse_args()
+
+    print(f"\nAction decoding mode: {'RAW (no unnorm)' if args.raw_actions else f'UNNORM ({args.unnorm_key})'}")
 
     # Load model
     model, processor = load_finetuned_model(args.checkpoint, args.device)
 
     # Create policy
-    policy = OpenVLAPolicy(model, processor, args.device, args.unnorm_key)
+    policy = OpenVLAPolicy(model, processor, args.device, args.unnorm_key, use_raw_actions=args.raw_actions)
 
     # Evaluate
     results = evaluate_suite(
