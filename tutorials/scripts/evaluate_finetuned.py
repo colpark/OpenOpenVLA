@@ -169,8 +169,10 @@ class OpenVLAPolicy:
     Policy wrapper for OpenVLA inference in LIBERO.
     """
 
-    # Action tokenization constants (256 bins per dimension)
+    # Action tokenization constants (must match OpenVLA's ActionTokenizer)
     N_ACTION_BINS = 256
+    MIN_ACTION = -1.0
+    MAX_ACTION = 1.0
 
     def __init__(self, model, processor, device="cuda:0", unnorm_key=None, use_raw_actions=True):
         self.model = model
@@ -179,30 +181,41 @@ class OpenVLAPolicy:
         self.unnorm_key = unnorm_key
         self.use_raw_actions = use_raw_actions  # Skip unnormalization for fine-tuned models
 
-        # Dynamically compute action token range from processor's tokenizer
-        # OpenVLA action tokens are the last 256 tokens in vocabulary
-        vocab_size = len(processor.tokenizer)
-        self.ACTION_TOKEN_BEGIN = vocab_size - self.N_ACTION_BINS
-        print(f"Vocab size: {vocab_size}, Action tokens: {self.ACTION_TOKEN_BEGIN}-{vocab_size-1}")
+        # Get vocab size for action token decoding
+        self.vocab_size = len(processor.tokenizer)
+
+        # Create bin centers matching OpenVLA's ActionTokenizer for decoding
+        bins = np.linspace(self.MIN_ACTION, self.MAX_ACTION, self.N_ACTION_BINS)
+        self.bin_centers = (bins[:-1] + bins[1:]) / 2.0  # 255 bin centers
+
+        print(f"Vocab size: {self.vocab_size}")
+        print(f"Action bins: {self.N_ACTION_BINS}, bin_centers: {len(self.bin_centers)}")
 
     def decode_actions_raw(self, action_token_ids, action_dim=7):
         """
-        Decode action tokens to continuous values WITHOUT unnormalization.
-        Actions are decoded to [-1, 1] range directly from token bins.
+        Decode action tokens to continuous values using OpenVLA's convention.
+
+        IMPORTANT: Must match OpenVLA's ActionTokenizer.decode_token_ids_to_actions()
+        OpenVLA encoding: token_id = vocab_size - discretized_action
+        OpenVLA decoding: discretized_action = vocab_size - token_id
+                          action = bin_centers[clip(discretized_action - 1, 0, 254)]
 
         Args:
             action_token_ids: Token IDs from model generation
             action_dim: Number of action dimensions (default 7 for LIBERO)
 
         Returns:
-            numpy array of continuous actions in [-1, 1]
+            numpy array of continuous actions
         """
-        # Convert token IDs to bin indices (0-255)
-        action_tokens = action_token_ids - self.ACTION_TOKEN_BEGIN
+        # Reverse the encoding: discretized_action = vocab_size - token_id
+        discretized_actions = self.vocab_size - action_token_ids.cpu().numpy()
 
-        # Convert bin indices to continuous values in [-1, 1]
-        # OpenVLA uses 256 bins, so bin 0 = -1, bin 255 = 1
-        actions = (action_tokens.cpu().numpy() / 255.0) * 2 - 1
+        # Adjust indices and clip to valid range (matching OpenVLA's decode logic)
+        # digitize returns [1, 256], we need indices [0, 254] for bin_centers
+        discretized_actions = np.clip(discretized_actions - 1, 0, len(self.bin_centers) - 1)
+
+        # Get continuous actions from bin centers
+        actions = self.bin_centers[discretized_actions]
 
         return actions[:action_dim]
 
@@ -278,8 +291,12 @@ class OpenVLAPolicy:
                 )
                 action = np.array(action)
 
-        # Invert gripper for LIBERO convention
-        if len(action) >= 7:
+        # Gripper inversion note:
+        # - For fine-tuned models (use_raw_actions=True): No inversion needed
+        #   because we trained on raw LIBERO actions which are already in LIBERO's convention
+        # - For base model (use_raw_actions=False): May need inversion
+        #   because base model was pre-trained on Bridge/other datasets with different convention
+        if not self.use_raw_actions and len(action) >= 7:
             action[6] = -action[6]
 
         return action

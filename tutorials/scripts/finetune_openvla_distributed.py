@@ -84,20 +84,27 @@ class LIBERODataset(torch.utils.data.Dataset):
     Optimized for distributed training with proper caching.
     """
 
-    # Action tokenization constants
-    # OpenVLA uses 256 bins per dimension, tokens start after the base vocabulary
+    # Action tokenization constants (must match OpenVLA's ActionTokenizer exactly!)
+    # OpenVLA uses 256 bins per dimension
     N_ACTION_BINS = 256
+    MIN_ACTION = -1.0
+    MAX_ACTION = 1.0
 
     def __init__(self, data_dir, processor, max_samples=None):
         self.data_dir = Path(data_dir)
         self.processor = processor
         self.max_samples = max_samples
 
-        # Get action token start from processor's tokenizer
-        # OpenVLA action tokens are the last 256 tokens in vocabulary
-        vocab_size = len(processor.tokenizer)
-        self.ACTION_TOKEN_BEGIN = vocab_size - self.N_ACTION_BINS
-        logger.info(f"Vocab size: {vocab_size}, Action tokens: {self.ACTION_TOKEN_BEGIN}-{vocab_size-1}")
+        # Get vocab size for action token mapping
+        self.vocab_size = len(processor.tokenizer)
+
+        # Create uniform bins matching OpenVLA's ActionTokenizer
+        # bins = np.linspace(-1, 1, 256) gives 256 bin edges
+        self.bins = np.linspace(self.MIN_ACTION, self.MAX_ACTION, self.N_ACTION_BINS)
+        self.bin_centers = (self.bins[:-1] + self.bins[1:]) / 2.0  # 255 bin centers
+
+        logger.info(f"Vocab size: {self.vocab_size}")
+        logger.info(f"Action bins: {self.N_ACTION_BINS}, range [{self.MIN_ACTION}, {self.MAX_ACTION}]")
 
         # Index samples (only on rank 0, then broadcast)
         self.samples = self._index_samples()
@@ -161,22 +168,27 @@ class LIBERODataset(torch.utils.data.Dataset):
         """
         Convert continuous action to discrete action tokens.
 
+        IMPORTANT: Must match OpenVLA's ActionTokenizer exactly!
+        OpenVLA uses: token_id = vocab_size - digitized_action
+        where digitized_action = np.digitize(action, bins) returns indices [1, 256]
+
         Args:
             action: numpy array of shape (7,) with values in [-1, 1]
 
         Returns:
             tensor of action token IDs
         """
-        # Clip action to [-1, 1] range
-        action = np.clip(action, -1, 1)
+        # Clip action to valid range
+        action = np.clip(action, self.MIN_ACTION, self.MAX_ACTION)
 
-        # Convert to bin indices (0-255)
-        # bin 0 = -1, bin 255 = +1
-        bin_indices = ((action + 1) / 2 * (self.N_ACTION_BINS - 1)).astype(int)
-        bin_indices = np.clip(bin_indices, 0, self.N_ACTION_BINS - 1)
+        # Discretize using np.digitize (same as OpenVLA's ActionTokenizer)
+        # Returns indices from 1 to N_ACTION_BINS (inclusive)
+        discretized_action = np.digitize(action, self.bins)
 
-        # Convert to token IDs
-        action_tokens = bin_indices + self.ACTION_TOKEN_BEGIN
+        # Convert to token IDs using OpenVLA's convention:
+        # token_id = vocab_size - discretized_action
+        # This maps: action=-1 → token vocab_size-1, action=+1 → token vocab_size-256
+        action_tokens = self.vocab_size - discretized_action
 
         return torch.tensor(action_tokens, dtype=torch.long)
 
@@ -316,13 +328,18 @@ def setup_model_and_processor(args):
     if PEFT_AVAILABLE and args.use_lora:
         logger.info("Adding LoRA adapters...")
 
+        # Match official OpenVLA fine-tuning config:
+        # - target_modules="all-linear" targets ALL linear layers (not just attention)
+        # - lora_alpha = min(rank, 16) as per official config
+        # - lora_dropout = 0.0 as per official config
+        # - init_lora_weights = "gaussian" as per official config
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-            bias="none",
+            lora_alpha=min(args.lora_r, 16),  # Official uses min(rank, 16)
+            lora_dropout=0.0,  # Official uses 0.0
+            target_modules="all-linear",  # Official targets ALL linear layers
+            init_lora_weights="gaussian",  # Official uses gaussian init
         )
 
         model = get_peft_model(model, peft_config)
@@ -351,8 +368,8 @@ def main():
                         help="Per-device batch size")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8,
                         help="Gradient accumulation steps")
-    parser.add_argument("--learning-rate", type=float, default=2e-5,
-                        help="Learning rate")
+    parser.add_argument("--learning-rate", type=float, default=5e-4,
+                        help="Learning rate (official OpenVLA uses 5e-4)")
     parser.add_argument("--num-epochs", type=int, default=10,
                         help="Number of training epochs")
     parser.add_argument("--warmup-ratio", type=float, default=0.03,
