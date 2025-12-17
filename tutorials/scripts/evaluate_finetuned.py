@@ -30,6 +30,10 @@ from datetime import datetime
 # Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+# Import LIBERO early (before transformers trust_remote_code can interfere)
+from libero.libero import benchmark
+from libero.libero.envs import OffScreenRenderEnv
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -179,8 +183,6 @@ class OpenVLAPolicy:
 # ============================================================
 def create_libero_env(task, benchmark_instance, image_size=256):
     """Create LIBERO environment for a task."""
-    from libero.libero.envs import OffScreenRenderEnv
-
     task_id = benchmark_instance.get_task_names().index(task.name)
     bddl_file = benchmark_instance.get_task_bddl_file_path(task_id)
 
@@ -259,8 +261,6 @@ def evaluate_suite(policy, suite_name, n_trials=10, max_tasks=None):
     Returns:
         dict with per-task results and overall success rate
     """
-    from libero.libero import benchmark
-
     print(f"\nEvaluating on {suite_name}")
     print("=" * 60)
 
