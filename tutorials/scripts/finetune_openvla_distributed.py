@@ -329,15 +329,12 @@ def setup_model_and_processor(args):
         attn_implementation="eager",  # Avoid _supports_sdpa error with newer transformers
     )
 
-    # Enable gradient checkpointing for memory efficiency (single GPU only)
-    # NOTE: Gradient checkpointing is incompatible with DDP + LoRA due to
-    # reentrant backward passes causing "parameter marked ready twice" errors
-    use_ddp = int(os.environ.get('WORLD_SIZE', 1)) > 1
-    if hasattr(model, 'gradient_checkpointing_enable') and not use_ddp:
-        model.gradient_checkpointing_enable()
-        logger.info("Gradient checkpointing enabled")
-    elif use_ddp:
-        logger.info("Gradient checkpointing disabled (incompatible with DDP + LoRA)")
+    # Enable gradient checkpointing for memory efficiency
+    # NOTE: Must use use_reentrant=False for DDP + LoRA compatibility
+    # (reentrant=True causes "parameter marked ready twice" errors)
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        logger.info("Gradient checkpointing enabled (use_reentrant=False)")
 
     # Note: torch.compile is incompatible with PEFT + HF Trainer
     # Skip torch.compile when using LoRA to avoid '_orig_mod' error
