@@ -137,11 +137,27 @@ class OpenVLAPolicy:
         Returns:
             action: 7-DoF action array
         """
-        # Get image from observation
+        # Get image from observation - LIBERO uses 'agentview_image' key
         if isinstance(obs, dict):
-            image = obs.get('agentview_rgb', obs.get('image'))
+            # Try different possible keys for the image
+            image = None
+            for key in ['agentview_image', 'agentview_rgb', 'image', 'pixels']:
+                if key in obs and obs[key] is not None:
+                    image = obs[key]
+                    break
+
+            if image is None:
+                # Debug: print available keys
+                print(f"Warning: No image found in obs. Available keys: {list(obs.keys())}")
+                # Return zero action if no image
+                return np.zeros(7)
         else:
             image = obs
+
+        # Ensure image is a proper array
+        if not isinstance(image, np.ndarray) or image.ndim < 2:
+            print(f"Warning: Invalid image type={type(image)}, ndim={getattr(image, 'ndim', 'N/A')}")
+            return np.zeros(7)
 
         # Rotate image (LIBERO convention)
         image = np.rot90(image, k=2)
