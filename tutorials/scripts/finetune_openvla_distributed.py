@@ -34,13 +34,21 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 # ============================================================
-# Configuration
+# Configuration (auto-detect NERSC vs SciServer)
 # ============================================================
-PSCRATCH = os.environ.get('PSCRATCH', '/pscratch/sd/d/dpark1')
+# NERSC Perlmutter: PSCRATCH environment variable
+# SciServer: SCRATCH environment variable or default path
+if os.environ.get('PSCRATCH'):
+    BASE_DIR = os.environ['PSCRATCH']
+elif os.environ.get('SCRATCH'):
+    BASE_DIR = os.environ['SCRATCH']
+else:
+    BASE_DIR = "/home/idies/workspace/Temporary/dpark1/scratch"  # SciServer default
+
 MODEL_ID = "openvla/openvla-7b"
-DATA_DIR = f"{PSCRATCH}/libero_data"
-OUTPUT_DIR = f"{PSCRATCH}/openvla_finetune"
-CACHE_DIR = f"{PSCRATCH}/.cache"
+DATA_DIR = f"{BASE_DIR}/libero_data"
+OUTPUT_DIR = f"{BASE_DIR}/openvla_finetune"
+CACHE_DIR = f"{BASE_DIR}/.cache"
 
 # Set cache directories BEFORE importing HuggingFace
 os.environ['HF_HOME'] = f"{CACHE_DIR}/huggingface"
