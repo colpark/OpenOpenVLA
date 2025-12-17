@@ -63,13 +63,39 @@ def load_finetuned_model(checkpoint_path, device="cuda:0"):
     """
     from transformers import AutoModelForVision2Seq, AutoProcessor
 
+    checkpoint_path = Path(checkpoint_path)
     print(f"Loading fine-tuned model from: {checkpoint_path}")
 
-    # Check if this is a LoRA checkpoint or full model
-    is_lora = (Path(checkpoint_path) / "adapter_config.json").exists()
+    # Debug: Show checkpoint contents
+    if checkpoint_path.exists():
+        print(f"\nCheckpoint contents:")
+        for f in sorted(checkpoint_path.iterdir()):
+            size = f.stat().st_size / 1024 / 1024  # MB
+            print(f"  {f.name} ({size:.1f} MB)")
+    else:
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    # Detect checkpoint type
+    has_adapter_config = (checkpoint_path / "adapter_config.json").exists()
+    has_adapter_model = (checkpoint_path / "adapter_model.safetensors").exists() or \
+                        (checkpoint_path / "adapter_model.bin").exists()
+    has_model_safetensors = (checkpoint_path / "model.safetensors").exists()
+    has_pytorch_model = (checkpoint_path / "pytorch_model.bin").exists()
+
+    print(f"\nCheckpoint type detection:")
+    print(f"  adapter_config.json: {has_adapter_config}")
+    print(f"  adapter_model.*: {has_adapter_model}")
+    print(f"  model.safetensors: {has_model_safetensors}")
+    print(f"  pytorch_model.bin: {has_pytorch_model}")
+
+    # Determine loading strategy
+    is_lora = has_adapter_config and has_adapter_model
+    is_full_model = has_model_safetensors or has_pytorch_model
 
     if is_lora:
         from peft import PeftModel
+
+        print("\nDetected LoRA checkpoint - loading base model + adapters...")
 
         # Load base model
         print("Loading base model...")
@@ -83,20 +109,43 @@ def load_finetuned_model(checkpoint_path, device="cuda:0"):
 
         # Load LoRA weights
         print("Loading LoRA adapters...")
-        model = PeftModel.from_pretrained(base_model, checkpoint_path)
+        model = PeftModel.from_pretrained(base_model, str(checkpoint_path))
 
         # Merge for faster inference
         print("Merging LoRA weights...")
         model = model.merge_and_unload()
-    else:
-        # Load full model directly
-        print("Loading full model...")
+
+    elif is_full_model:
+        print("\nDetected full model checkpoint - loading directly...")
         model = AutoModelForVision2Seq.from_pretrained(
-            checkpoint_path,
+            str(checkpoint_path),
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             attn_implementation="eager",
         )
+    else:
+        # Fallback: try loading as LoRA anyway (might be HF Trainer checkpoint)
+        print("\nUnknown checkpoint format - attempting LoRA load...")
+        print("If this fails, check that training completed and saved properly.")
+
+        from peft import PeftModel
+
+        base_model = AutoModelForVision2Seq.from_pretrained(
+            "openvla/openvla-7b",
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+            cache_dir=f"{CACHE_DIR}/huggingface",
+            attn_implementation="eager",
+        )
+
+        try:
+            model = PeftModel.from_pretrained(base_model, str(checkpoint_path))
+            model = model.merge_and_unload()
+        except Exception as e:
+            print(f"\nError loading checkpoint: {e}")
+            print("\nFalling back to base model (NOT fine-tuned!)...")
+            print("WARNING: This will give zero-shot performance, not fine-tuned!")
+            model = base_model
 
     model.to(device)
     model.eval()
@@ -108,7 +157,7 @@ def load_finetuned_model(checkpoint_path, device="cuda:0"):
         cache_dir=f"{CACHE_DIR}/huggingface",
     )
 
-    print(f"Model loaded on {device}")
+    print(f"\nModel loaded on {device}")
     return model, processor
 
 
