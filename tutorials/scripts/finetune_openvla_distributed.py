@@ -84,10 +84,20 @@ class LIBERODataset(torch.utils.data.Dataset):
     Optimized for distributed training with proper caching.
     """
 
+    # Action tokenization constants
+    # OpenVLA uses 256 bins per dimension, tokens start after the base vocabulary
+    N_ACTION_BINS = 256
+
     def __init__(self, data_dir, processor, max_samples=None):
         self.data_dir = Path(data_dir)
         self.processor = processor
         self.max_samples = max_samples
+
+        # Get action token start from processor's tokenizer
+        # OpenVLA action tokens are the last 256 tokens in vocabulary
+        vocab_size = len(processor.tokenizer)
+        self.ACTION_TOKEN_BEGIN = vocab_size - self.N_ACTION_BINS
+        logger.info(f"Vocab size: {vocab_size}, Action tokens: {self.ACTION_TOKEN_BEGIN}-{vocab_size-1}")
 
         # Index samples (only on rank 0, then broadcast)
         self.samples = self._index_samples()
@@ -143,10 +153,6 @@ class LIBERODataset(torch.utils.data.Dataset):
                 continue
 
         return samples
-
-    # Action tokenization constants (OpenVLA uses 256 bins per dimension)
-    ACTION_TOKEN_BEGIN = 32000  # Start of action tokens in vocabulary
-    N_ACTION_BINS = 256
 
     def __len__(self):
         return len(self.samples)
