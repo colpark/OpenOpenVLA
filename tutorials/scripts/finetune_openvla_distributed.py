@@ -178,11 +178,11 @@ class LIBERODataset(torch.utils.data.Dataset):
 
 def collate_fn(batch):
     """Custom collate function for variable-length sequences."""
-    # Separate actions from other inputs
-    actions = torch.stack([item.pop('action') for item in batch])
-
-    # Pad sequences
-    from transformers import DataCollatorWithPadding
+    # Remove actions from batch items (not passed to model forward)
+    # Actions are stored for reference but OpenVLA predicts action tokens via labels
+    for item in batch:
+        if 'action' in item:
+            item.pop('action')
 
     # Find max length
     max_len = max(item['input_ids'].shape[0] for item in batch)
@@ -210,13 +210,12 @@ def collate_fn(batch):
         )
         padded_batch['pixel_values'].append(item['pixel_values'])
 
-    # Stack
+    # Stack - only model-compatible keys
     result = {
         'input_ids': torch.stack(padded_batch['input_ids']),
         'attention_mask': torch.stack(padded_batch['attention_mask']),
         'labels': torch.stack(padded_batch['labels']),
         'pixel_values': torch.stack(padded_batch['pixel_values']),
-        'actions': actions,
     }
 
     return result
