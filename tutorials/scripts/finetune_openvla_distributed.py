@@ -144,8 +144,35 @@ class LIBERODataset(torch.utils.data.Dataset):
 
         return samples
 
+    # Action tokenization constants (OpenVLA uses 256 bins per dimension)
+    ACTION_TOKEN_BEGIN = 32000  # Start of action tokens in vocabulary
+    N_ACTION_BINS = 256
+
     def __len__(self):
         return len(self.samples)
+
+    def tokenize_action(self, action):
+        """
+        Convert continuous action to discrete action tokens.
+
+        Args:
+            action: numpy array of shape (7,) with values in [-1, 1]
+
+        Returns:
+            tensor of action token IDs
+        """
+        # Clip action to [-1, 1] range
+        action = np.clip(action, -1, 1)
+
+        # Convert to bin indices (0-255)
+        # bin 0 = -1, bin 255 = +1
+        bin_indices = ((action + 1) / 2 * (self.N_ACTION_BINS - 1)).astype(int)
+        bin_indices = np.clip(bin_indices, 0, self.N_ACTION_BINS - 1)
+
+        # Convert to token IDs
+        action_tokens = bin_indices + self.ACTION_TOKEN_BEGIN
+
+        return torch.tensor(action_tokens, dtype=torch.long)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
@@ -170,19 +197,32 @@ class LIBERODataset(torch.utils.data.Dataset):
 
         # Squeeze batch dimension added by processor
         inputs = {k: v.squeeze(0) for k, v in inputs.items()}
-        inputs['labels'] = inputs['input_ids'].clone()  # For causal LM
-        inputs['action'] = torch.tensor(action, dtype=torch.float32)
+
+        # Tokenize the action into discrete tokens
+        action_tokens = self.tokenize_action(action)
+
+        # Append action tokens to input_ids
+        inputs['input_ids'] = torch.cat([inputs['input_ids'], action_tokens])
+
+        # Extend attention mask for action tokens
+        inputs['attention_mask'] = torch.cat([
+            inputs['attention_mask'],
+            torch.ones(len(action_tokens), dtype=inputs['attention_mask'].dtype)
+        ])
+
+        # Create labels: -100 for prompt tokens (no loss), action tokens for prediction
+        # The model should learn to predict the action tokens given the image and prompt
+        prompt_len = len(inputs['input_ids']) - len(action_tokens)
+        labels = torch.full_like(inputs['input_ids'], -100)  # -100 = ignore in loss
+        labels[prompt_len:] = action_tokens  # Only compute loss on action tokens
+
+        inputs['labels'] = labels
 
         return inputs
 
 
 def collate_fn(batch):
     """Custom collate function for variable-length sequences."""
-    # Remove actions from batch items (not passed to model forward)
-    # Actions are stored for reference but OpenVLA predicts action tokens via labels
-    for item in batch:
-        if 'action' in item:
-            item.pop('action')
 
     # Find max length
     max_len = max(item['input_ids'].shape[0] for item in batch)
