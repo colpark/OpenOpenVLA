@@ -9,15 +9,28 @@ Key optimizations:
 - Proper LoRA configuration
 
 Usage:
-    # Single GPU (for testing)
-    python finetune_openvla_distributed.py --single-gpu
+    # Single GPU (RECOMMENDED for first run)
+    CUDA_VISIBLE_DEVICES=0 python finetune_openvla_distributed.py
 
-    # Multi-GPU with accelerate (RECOMMENDED)
+    # Multi-GPU with accelerate (for faster training)
     accelerate launch --config_file accelerate_config.yaml finetune_openvla_distributed.py
+
+IMPORTANT: OpenVLA's custom vision backbone doesn't work with PyTorch DataParallel.
+           For multi-GPU training, you MUST use accelerate launch or torchrun.
 """
 
 import os
 import sys
+
+# CRITICAL: Force single GPU if not using accelerate/torchrun
+# Must be done BEFORE importing torch to take effect
+if 'WORLD_SIZE' not in os.environ and 'CUDA_VISIBLE_DEVICES' not in os.environ:
+    # Not running with accelerate/torchrun and no explicit GPU selection
+    # Force single GPU to avoid DataParallel issues with OpenVLA
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    print("INFO: Forcing single GPU mode (CUDA_VISIBLE_DEVICES=0)")
+    print("      For multi-GPU, use: accelerate launch --multi_gpu ...")
+
 import argparse
 import torch
 import numpy as np
