@@ -169,8 +169,8 @@ class OpenVLAPolicy:
     Policy wrapper for OpenVLA inference in LIBERO.
     """
 
-    # Action token IDs in OpenVLA vocabulary (256 bins per dimension)
-    ACTION_TOKEN_BEGIN = 32000  # Start of action tokens in vocabulary
+    # Action tokenization constants (256 bins per dimension)
+    N_ACTION_BINS = 256
 
     def __init__(self, model, processor, device="cuda:0", unnorm_key=None, use_raw_actions=True):
         self.model = model
@@ -178,6 +178,12 @@ class OpenVLAPolicy:
         self.device = device
         self.unnorm_key = unnorm_key
         self.use_raw_actions = use_raw_actions  # Skip unnormalization for fine-tuned models
+
+        # Dynamically compute action token range from processor's tokenizer
+        # OpenVLA action tokens are the last 256 tokens in vocabulary
+        vocab_size = len(processor.tokenizer)
+        self.ACTION_TOKEN_BEGIN = vocab_size - self.N_ACTION_BINS
+        print(f"Vocab size: {vocab_size}, Action tokens: {self.ACTION_TOKEN_BEGIN}-{vocab_size-1}")
 
     def decode_actions_raw(self, action_token_ids, action_dim=7):
         """
