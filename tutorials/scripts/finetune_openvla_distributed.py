@@ -377,10 +377,10 @@ def main():
                         help="LoRA dropout")
 
     # Training arguments
-    parser.add_argument("--batch-size", type=int, default=4,
-                        help="Per-device batch size")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8,
-                        help="Gradient accumulation steps")
+    parser.add_argument("--batch-size", type=int, default=16,
+                        help="Per-device batch size (16-24 fits on 80GB GPU)")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
+                        help="Gradient accumulation steps (1 = disabled, use higher batch size instead)")
     parser.add_argument("--learning-rate", type=float, default=5e-4,
                         help="Learning rate (official OpenVLA uses 5e-4)")
     parser.add_argument("--num-epochs", type=int, default=10,
