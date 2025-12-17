@@ -338,8 +338,8 @@ def main():
                         help="Device to run evaluation on")
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON file for results")
-    parser.add_argument("--unnorm-key", type=str, default=None,
-                        help="Unnormalization key (None uses fine-tuned model's default)")
+    parser.add_argument("--unnorm-key", type=str, default="bridge_orig",
+                        help="Unnormalization key for action decoding (default: bridge_orig)")
 
     args = parser.parse_args()
 
