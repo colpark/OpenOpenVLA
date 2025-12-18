@@ -192,11 +192,25 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                     else:
                         action = np.array(action_data)
 
-                # Get language instruction - prefer episode-level, then step-level
+                # Get language instruction - check observation first (Bridge V2 stores it there)
                 instruction = None
-                if episode_instruction:
+
+                # Bridge V2: instruction is in observation['natural_language_instruction']
+                if 'natural_language_instruction' in obs:
+                    lang_inst = obs['natural_language_instruction']
+                    if hasattr(lang_inst, 'numpy'):
+                        instruction = lang_inst.numpy()
+                    else:
+                        instruction = lang_inst
+                    if isinstance(instruction, bytes):
+                        instruction = instruction.decode('utf-8')
+
+                # Fallback: episode-level instruction
+                if not instruction and episode_instruction:
                     instruction = episode_instruction
-                else:
+
+                # Fallback: step-level instruction
+                if not instruction:
                     lang_inst = step.get('language_instruction', None)
                     if lang_inst is not None:
                         if hasattr(lang_inst, 'numpy'):
