@@ -15,6 +15,45 @@ import numpy as np
 from PIL import Image
 import pickle
 
+# =============================================================================
+# CRITICAL: Version Check
+# OpenVLA requires transformers==4.40.1 for correct inference
+# Using newer versions causes constant "zero action" output!
+# =============================================================================
+def check_versions():
+    """Check for version compatibility issues."""
+    import transformers
+    import tokenizers
+
+    issues = []
+
+    if transformers.__version__ != "4.40.1":
+        issues.append(f"transformers=={transformers.__version__} (need 4.40.1)")
+
+    if tokenizers.__version__ != "0.19.1":
+        issues.append(f"tokenizers=={tokenizers.__version__} (need 0.19.1)")
+
+    if issues:
+        print("=" * 60)
+        print(" ⚠️  VERSION INCOMPATIBILITY DETECTED")
+        print("=" * 60)
+        for issue in issues:
+            print(f"  - {issue}")
+        print()
+        print("OpenVLA was trained with transformers==4.40.1")
+        print("Using newer versions causes inference-time regressions!")
+        print()
+        print("To fix, run:")
+        print("  pip install transformers==4.40.1 tokenizers==0.19.1")
+        print()
+        print("Continuing anyway, but expect constant output issues...")
+        print("=" * 60)
+        return False
+    return True
+
+# Run version check before anything else
+check_versions()
+
 # Configuration
 if 'SCRATCH' in os.environ:
     BASE_DIR = os.environ['SCRATCH']

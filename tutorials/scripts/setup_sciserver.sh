@@ -79,11 +79,14 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA av
 # ============================================================
 echo "Step 4: Installing OpenVLA dependencies..."
 
-pip install transformers>=4.40.0
+# CRITICAL: OpenVLA requires EXACT versions for correct inference
+# Using newer transformers causes constant "zero action" output
+pip install transformers==4.40.1
+pip install tokenizers==0.19.1
 pip install accelerate>=0.30.0
-pip install peft>=0.10.0
+pip install peft==0.11.1
 pip install bitsandbytes
-pip install timm
+pip install timm==0.9.10
 pip install sentencepiece
 pip install protobuf
 pip install einops

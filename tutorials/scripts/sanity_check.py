@@ -21,6 +21,39 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import warnings
 warnings.filterwarnings('ignore')
 
+# =============================================================================
+# CRITICAL: Version Check
+# =============================================================================
+def check_versions():
+    """Check for version compatibility issues."""
+    import transformers
+    import tokenizers
+
+    issues = []
+
+    if transformers.__version__ != "4.40.1":
+        issues.append(f"transformers=={transformers.__version__} (need 4.40.1)")
+
+    if tokenizers.__version__ != "0.19.1":
+        issues.append(f"tokenizers=={tokenizers.__version__} (need 0.19.1)")
+
+    if issues:
+        print("=" * 60)
+        print(" ⚠️  VERSION INCOMPATIBILITY DETECTED")
+        print("=" * 60)
+        for issue in issues:
+            print(f"  - {issue}")
+        print()
+        print("OpenVLA requires transformers==4.40.1")
+        print("Using newer versions causes constant output issues!")
+        print()
+        print("To fix: pip install transformers==4.40.1 tokenizers==0.19.1")
+        print("=" * 60)
+        return False
+    return True
+
+check_versions()
+
 # Configuration
 if 'SCRATCH' in os.environ:
     BASE_DIR = os.environ['SCRATCH']
