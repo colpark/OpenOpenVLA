@@ -23,10 +23,34 @@ from pathlib import Path
 import json
 import h5py
 
-# Suppress warnings
+# Suppress warnings and force TensorFlow to use CPU only (before any TF import)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'  # In case GPU is used
+os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'  # Better allocation
+# Actually just hide GPUs from TensorFlow entirely
+_original_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+
 import warnings
 warnings.filterwarnings('ignore')
+
+def limit_tensorflow_gpu():
+    """Prevent TensorFlow from grabbing GPU memory."""
+    try:
+        import tensorflow as tf
+        # Limit TensorFlow to CPU only
+        tf.config.set_visible_devices([], 'GPU')
+        print("  [TensorFlow restricted to CPU]")
+    except Exception as e:
+        pass
+
+# Restore CUDA_VISIBLE_DEVICES for PyTorch after TensorFlow import
+def restore_cuda_for_pytorch():
+    """Restore CUDA visibility for PyTorch."""
+    global _original_cuda_visible
+    if _original_cuda_visible is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = _original_cuda_visible
+    elif 'CUDA_VISIBLE_DEVICES' in os.environ:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 # Configuration
 if 'SCRATCH' in os.environ:
@@ -92,11 +116,42 @@ def load_bridge_samples(n_samples=10):
     """Load real Bridge V2 samples (OpenVLA's training data)."""
     print("Attempting to load Bridge V2 data (OpenVLA's training data)...")
 
+    # Try cached data first
+    cache_file = f"{CACHE_DIR}/bridge_v2_samples.pkl"
+    if os.path.exists(cache_file):
+        print(f"  Loading from cache: {cache_file}")
+        try:
+            import pickle
+            with open(cache_file, 'rb') as f:
+                cached_samples = pickle.load(f)
+
+            # Convert to expected format
+            samples = []
+            for s in cached_samples[:n_samples]:
+                img = s['image']
+                if isinstance(img, np.ndarray):
+                    img = Image.fromarray(img)
+                samples.append({
+                    'image': img,
+                    'action': s['action'][:7] if len(s['action']) >= 7 else np.pad(s['action'], (0, 7-len(s['action']))),
+                    'instruction': s['instruction'],
+                    'source': 'bridge_v2_cached',
+                })
+
+            if samples:
+                print_pass(f"Loaded {len(samples)} Bridge V2 samples from cache")
+                return samples
+        except Exception as e:
+            print(f"  Cache load failed: {e}")
+
+    # Try loading from GCS
     try:
+        # Restrict TensorFlow to CPU before importing
+        limit_tensorflow_gpu()
+
         import tensorflow_datasets as tfds
 
-        # Try to load Bridge V2
-        print("  Loading from tensorflow_datasets...")
+        print("  Loading from tensorflow_datasets (GCS)...")
         builder = tfds.builder_from_directory(
             builder_dir="gs://gresearch/robotics/bridge/0.1.0"
         )
@@ -112,13 +167,76 @@ def load_bridge_samples(n_samples=10):
             mid = len(steps) // 2
             step = steps[mid]
 
-            image = step['observation']['image'].numpy()
-            action = step['action'].numpy()
-            instruction = step['language_instruction'].numpy().decode('utf-8')
+            # Extract image - handle nested observation structure
+            obs = step['observation']
+            if 'image' in obs:
+                image_data = obs['image']
+            elif 'image_0' in obs:
+                image_data = obs['image_0']
+            else:
+                img_keys = [k for k in obs.keys() if 'image' in k.lower()]
+                if img_keys:
+                    image_data = obs[img_keys[0]]
+                else:
+                    continue
+
+            if hasattr(image_data, 'numpy'):
+                image = image_data.numpy()
+            else:
+                image = np.array(image_data)
+
+            # Extract action - handle dict or tensor format
+            action_data = step['action']
+            if isinstance(action_data, dict):
+                action_parts = []
+                if 'world_vector' in action_data:
+                    wv = action_data['world_vector']
+                    if hasattr(wv, 'numpy'):
+                        wv = wv.numpy()
+                    action_parts.extend(wv.flatten()[:3])
+                if 'rotation_delta' in action_data:
+                    rd = action_data['rotation_delta']
+                    if hasattr(rd, 'numpy'):
+                        rd = rd.numpy()
+                    action_parts.extend(rd.flatten()[:3])
+                if 'gripper_closedness_action' in action_data:
+                    gc = action_data['gripper_closedness_action']
+                    if hasattr(gc, 'numpy'):
+                        gc = gc.numpy()
+                    action_parts.append(float(gc.flatten()[0]))
+                elif 'open_gripper' in action_data:
+                    og = action_data['open_gripper']
+                    if hasattr(og, 'numpy'):
+                        og = og.numpy()
+                    action_parts.append(float(og.flatten()[0]))
+                action = np.array(action_parts, dtype=np.float32)
+            else:
+                if hasattr(action_data, 'numpy'):
+                    action = action_data.numpy()
+                else:
+                    action = np.array(action_data)
+
+            # Get instruction
+            lang_inst = step.get('language_instruction', None)
+            if lang_inst is not None:
+                if hasattr(lang_inst, 'numpy'):
+                    instruction = lang_inst.numpy()
+                else:
+                    instruction = lang_inst
+                if isinstance(instruction, bytes):
+                    instruction = instruction.decode('utf-8')
+            else:
+                instruction = "manipulate the object"
+
+            # Ensure 7-dim action
+            if len(action) < 7:
+                action = np.pad(action, (0, 7-len(action)))
+            else:
+                action = action[:7]
 
             samples.append({
                 'image': Image.fromarray(image),
-                'action': action[:7] if len(action) >= 7 else np.pad(action, (0, 7-len(action))),
+                'action': action.astype(np.float32),
                 'instruction': instruction,
                 'source': 'bridge_v2',
             })
@@ -127,7 +245,7 @@ def load_bridge_samples(n_samples=10):
                 break
 
         if samples:
-            print_pass(f"Loaded {len(samples)} Bridge V2 samples")
+            print_pass(f"Loaded {len(samples)} Bridge V2 samples from GCS")
             return samples
 
     except Exception as e:
