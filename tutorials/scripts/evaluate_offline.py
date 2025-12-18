@@ -94,6 +94,7 @@ def load_model(checkpoint_path, device="cuda:0"):
             trust_remote_code=True,
             cache_dir=f"{CACHE_DIR}/huggingface",
             low_cpu_mem_usage=True,
+            attn_implementation="eager",  # OpenVLA doesn't support SDPA
         )
         # Load LoRA adapters
         model = PeftModel.from_pretrained(model, checkpoint_path)
@@ -111,6 +112,7 @@ def load_model(checkpoint_path, device="cuda:0"):
             trust_remote_code=True,
             cache_dir=f"{CACHE_DIR}/huggingface",
             low_cpu_mem_usage=True,
+            attn_implementation="eager",  # OpenVLA doesn't support SDPA
         )
         processor = AutoProcessor.from_pretrained(
             checkpoint_path,
