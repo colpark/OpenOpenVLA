@@ -5,13 +5,13 @@ Comprehensive OpenVLA Pipeline Debugger
 Tests each component of the training/evaluation pipeline independently:
 1. Model loading
 2. Action tokenization (encode/decode roundtrip)
-3. Data loading
+3. Data loading from REAL training data (Bridge V2 or LIBERO)
 4. Forward pass
 5. Loss computation on action tokens
 6. Single training step (does loss decrease?)
 7. Inference after training (do predictions change?)
 
-Uses controlled synthetic data to isolate issues.
+Uses REAL training data to validate the full pipeline.
 """
 
 import os
@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 import json
+import h5py
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -34,6 +35,7 @@ else:
     BASE_DIR = "/home/idies/workspace/Temporary/dpark1/scratch"
 
 CACHE_DIR = f"{BASE_DIR}/.cache"
+LIBERO_DIR = f"{BASE_DIR}/libero_data"
 os.environ['HF_HOME'] = f"{CACHE_DIR}/huggingface"
 
 from transformers import AutoModelForVision2Seq, AutoProcessor
@@ -86,17 +88,169 @@ class ActionTokenizer:
         return self.bin_centers[discretized]
 
 
+def load_bridge_samples(n_samples=10):
+    """Load real Bridge V2 samples (OpenVLA's training data)."""
+    print("Attempting to load Bridge V2 data (OpenVLA's training data)...")
+
+    try:
+        import tensorflow_datasets as tfds
+
+        # Try to load Bridge V2
+        print("  Loading from tensorflow_datasets...")
+        builder = tfds.builder_from_directory(
+            builder_dir="gs://gresearch/robotics/bridge/0.1.0"
+        )
+        dataset = builder.as_dataset(split="train")
+
+        samples = []
+        for episode in dataset.take(n_samples * 2):  # Take more episodes, sample from each
+            steps = list(episode['steps'])
+            if len(steps) < 5:
+                continue
+
+            # Sample from middle of episode
+            mid = len(steps) // 2
+            step = steps[mid]
+
+            image = step['observation']['image'].numpy()
+            action = step['action'].numpy()
+            instruction = step['language_instruction'].numpy().decode('utf-8')
+
+            samples.append({
+                'image': Image.fromarray(image),
+                'action': action[:7] if len(action) >= 7 else np.pad(action, (0, 7-len(action))),
+                'instruction': instruction,
+                'source': 'bridge_v2',
+            })
+
+            if len(samples) >= n_samples:
+                break
+
+        if samples:
+            print_pass(f"Loaded {len(samples)} Bridge V2 samples")
+            return samples
+
+    except Exception as e:
+        print(f"  Could not load Bridge V2: {e}")
+
+    return None
+
+
+def load_libero_samples(n_samples=10):
+    """Load real LIBERO samples."""
+    print("Loading LIBERO data...")
+
+    data_path = Path(LIBERO_DIR)
+    hdf5_files = list(data_path.rglob("*.hdf5"))
+
+    if not hdf5_files:
+        print(f"  No HDF5 files found in {LIBERO_DIR}")
+        return None
+
+    print(f"  Found {len(hdf5_files)} HDF5 files")
+
+    samples = []
+    for filepath in hdf5_files:
+        if len(samples) >= n_samples:
+            break
+
+        try:
+            with h5py.File(filepath, 'r') as f:
+                # Get language instruction
+                instruction = f.attrs.get('language_instruction', None)
+                if instruction is None:
+                    task_name = filepath.stem.replace("_demo", "").replace("_", " ")
+                    instruction = task_name
+                elif isinstance(instruction, bytes):
+                    instruction = instruction.decode('utf-8')
+
+                # Get first demo
+                demo_keys = list(f['data'].keys())
+                if not demo_keys:
+                    continue
+
+                demo = f['data'][demo_keys[0]]
+                images = demo['obs']['agentview_rgb'][:]
+                actions = demo['actions'][:]
+
+                # Sample frames from this demo
+                n_frames = len(images)
+                indices = np.linspace(0, n_frames - 1, min(3, n_frames), dtype=int)
+
+                for idx in indices:
+                    if len(samples) >= n_samples:
+                        break
+
+                    image = images[idx]
+                    image = np.rot90(image, k=2)  # LIBERO rotation
+
+                    action = actions[idx]
+
+                    samples.append({
+                        'image': Image.fromarray(image),
+                        'action': action[:7],
+                        'instruction': instruction,
+                        'source': 'libero',
+                    })
+
+        except Exception as e:
+            print(f"  Error loading {filepath.name}: {e}")
+            continue
+
+    if samples:
+        print_pass(f"Loaded {len(samples)} LIBERO samples")
+        return samples
+
+    return None
+
+
+def load_real_training_data(n_samples=10):
+    """Load real training data - tries Bridge V2 first, falls back to LIBERO."""
+    print_section("Loading REAL Training Data")
+
+    # Try Bridge V2 first (actual OpenVLA training data)
+    samples = load_bridge_samples(n_samples)
+
+    # Fall back to LIBERO
+    if samples is None:
+        print("  Falling back to LIBERO data...")
+        samples = load_libero_samples(n_samples)
+
+    if samples is None:
+        print_fail("Could not load any real training data!")
+        print("  Please ensure LIBERO data is available at:", LIBERO_DIR)
+        return None
+
+    # Show sample info
+    print(f"\nLoaded {len(samples)} samples from {samples[0]['source']}")
+    print("\nSample data preview:")
+    for i, s in enumerate(samples[:3]):
+        print(f"  {i+1}. Instruction: {s['instruction'][:50]}...")
+        print(f"     Action: {s['action'][:4]}...")
+        print(f"     Image shape: {np.array(s['image']).shape}")
+
+    return samples
+
+
 def create_test_samples(n_samples=5):
-    """Create controlled test samples with known actions."""
+    """Load real training samples (wrapper for compatibility)."""
+    samples = load_real_training_data(n_samples)
+    if samples is None:
+        print_warn("Falling back to synthetic data...")
+        return create_synthetic_samples(n_samples)
+    return samples
+
+
+def create_synthetic_samples(n_samples=5):
+    """Create synthetic test samples (fallback only)."""
     samples = []
 
-    # Create samples with distinct, known actions
     test_actions = [
-        [0.5, 0.3, -0.2, 0.0, 0.1, -0.1, 1.0],   # Move right, forward, down, gripper open
-        [-0.5, -0.3, 0.2, 0.0, -0.1, 0.1, -1.0], # Move left, back, up, gripper close
-        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],     # Stay still
-        [1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 1.0],     # Max positive
-        [-1.0, -1.0, -1.0, -0.5, -0.5, -0.5, -1.0], # Max negative
+        [0.5, 0.3, -0.2, 0.0, 0.1, -0.1, 1.0],
+        [-0.5, -0.3, 0.2, 0.0, -0.1, 0.1, -1.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 1.0],
+        [-1.0, -1.0, -1.0, -0.5, -0.5, -0.5, -1.0],
     ]
 
     instructions = [
@@ -108,11 +262,8 @@ def create_test_samples(n_samples=5):
     ]
 
     for i in range(n_samples):
-        # Create a distinctive image for each sample
         img = np.zeros((256, 256, 3), dtype=np.uint8)
-        # Different background color for each sample
         img[:, :] = [50 + i*40, 100, 150 - i*20]
-        # Add a colored block
         block_color = [200, 50 + i*30, 50]
         img[100:150, 100+i*20:150+i*20] = block_color
 
@@ -120,6 +271,7 @@ def create_test_samples(n_samples=5):
             'image': Image.fromarray(img),
             'action': np.array(test_actions[i % len(test_actions)]),
             'instruction': instructions[i % len(instructions)],
+            'source': 'synthetic',
         })
 
     return samples
