@@ -145,9 +145,17 @@ def main():
         # Debug first sample
         if i == 0:
             print(f"[DEBUG] Prompt: {prompt[:80]}...")
+            print(f"[DEBUG] Input keys: {inputs.keys()}")
             print(f"[DEBUG] Input IDs shape: {inputs['input_ids'].shape}")
             print(f"[DEBUG] Last 10 input tokens: {inputs['input_ids'][0, -10:].tolist()}")
             print(f"[DEBUG] Last 10 decoded: '{processor.tokenizer.decode(inputs['input_ids'][0, -10:])}'")
+            if 'pixel_values' in inputs:
+                pv = inputs['pixel_values']
+                print(f"[DEBUG] pixel_values shape: {pv.shape}, dtype: {pv.dtype}")
+                print(f"[DEBUG] pixel_values range: [{pv.min():.3f}, {pv.max():.3f}]")
+            else:
+                print("[DEBUG] WARNING: No pixel_values in inputs!")
+            print(f"[DEBUG] Image size: {image.size}, mode: {image.mode}")
 
         # CRITICAL: Add special empty token (29871) if not present
         # This is required to match training-time inputs!
