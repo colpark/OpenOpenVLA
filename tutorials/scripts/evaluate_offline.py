@@ -223,9 +223,14 @@ def load_libero_data(data_dir, max_samples=100):
 
         try:
             with h5py.File(filepath, 'r') as f:
-                # Get task instruction from filename or attributes
-                task_name = filepath.stem.replace("_demo", "").replace("_", " ")
-                instruction = f"Task: {task_name}"
+                # Get language instruction from HDF5 attributes (same as training)
+                instruction = f.attrs.get('language_instruction', None)
+                if instruction is None:
+                    # Fallback to filename if no instruction in attributes
+                    task_name = filepath.stem.replace("_demo", "").replace("_", " ")
+                    instruction = f"perform the task: {task_name}"
+                elif isinstance(instruction, bytes):
+                    instruction = instruction.decode('utf-8')
 
                 for demo_key in f['data'].keys():
                     if len(samples) >= max_samples:
