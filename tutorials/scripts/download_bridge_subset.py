@@ -96,17 +96,84 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
 
                 step = steps[idx]
 
-                # Extract data
-                image = step['observation']['image'].numpy()
-                action = step['action'].numpy()
+                # Debug: print structure on first sample
+                if len(samples) == 0:
+                    print(f"\n[DEBUG] Step keys: {step.keys()}")
+                    print(f"[DEBUG] Observation keys: {step['observation'].keys()}")
+                    if 'action' in step:
+                        action_val = step['action']
+                        if isinstance(action_val, dict):
+                            print(f"[DEBUG] Action is dict with keys: {action_val.keys()}")
+                        else:
+                            print(f"[DEBUG] Action type: {type(action_val)}")
+
+                # Extract image - handle nested observation structure
+                obs = step['observation']
+                if 'image' in obs:
+                    image_data = obs['image']
+                elif 'image_0' in obs:
+                    image_data = obs['image_0']
+                else:
+                    # Find first image key
+                    img_keys = [k for k in obs.keys() if 'image' in k.lower()]
+                    if img_keys:
+                        image_data = obs[img_keys[0]]
+                    else:
+                        print(f"[WARN] No image found in observation, skipping")
+                        continue
+
+                # Convert to numpy
+                if hasattr(image_data, 'numpy'):
+                    image = image_data.numpy()
+                else:
+                    image = np.array(image_data)
+
+                # Extract action - handle dict or tensor format
+                action_data = step['action']
+                if isinstance(action_data, dict):
+                    # Bridge V2 uses dict format with separate components
+                    # Common keys: 'world_vector', 'rotation_delta', 'gripper_closedness_action'
+                    action_parts = []
+                    if 'world_vector' in action_data:
+                        wv = action_data['world_vector']
+                        if hasattr(wv, 'numpy'):
+                            wv = wv.numpy()
+                        action_parts.extend(wv.flatten()[:3])  # x, y, z
+                    if 'rotation_delta' in action_data:
+                        rd = action_data['rotation_delta']
+                        if hasattr(rd, 'numpy'):
+                            rd = rd.numpy()
+                        action_parts.extend(rd.flatten()[:3])  # roll, pitch, yaw
+                    if 'gripper_closedness_action' in action_data:
+                        gc = action_data['gripper_closedness_action']
+                        if hasattr(gc, 'numpy'):
+                            gc = gc.numpy()
+                        action_parts.append(float(gc.flatten()[0]))  # gripper
+                    elif 'open_gripper' in action_data:
+                        og = action_data['open_gripper']
+                        if hasattr(og, 'numpy'):
+                            og = og.numpy()
+                        action_parts.append(float(og.flatten()[0]))
+
+                    action = np.array(action_parts, dtype=np.float32)
+                else:
+                    # Tensor format
+                    if hasattr(action_data, 'numpy'):
+                        action = action_data.numpy()
+                    else:
+                        action = np.array(action_data)
 
                 # Get language instruction
                 lang_inst = step.get('language_instruction', None)
                 if lang_inst is not None:
-                    instruction = lang_inst.numpy()
+                    if hasattr(lang_inst, 'numpy'):
+                        instruction = lang_inst.numpy()
+                    else:
+                        instruction = lang_inst
                     if isinstance(instruction, bytes):
                         instruction = instruction.decode('utf-8')
                 else:
+                    # Try episode-level instruction
                     instruction = "manipulate the object"
 
                 # Ensure action is 7-dim
