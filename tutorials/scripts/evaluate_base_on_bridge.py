@@ -126,6 +126,10 @@ def main():
     for inst, group in list(instruction_groups.items())[:10]:
         test_samples.append(group[0])
 
+    # Debug: check what token 29871 is
+    print(f"\n[DEBUG] Token 29871 = '{processor.tokenizer.decode([29871])}'")
+    print(f"[DEBUG] Vocab size: {len(processor.tokenizer)}")
+
     for i, sample in enumerate(test_samples):
         instruction = sample['instruction']
         image = sample['image']
@@ -137,6 +141,13 @@ def main():
         # Process
         inputs = processor(prompt, image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Debug first sample
+        if i == 0:
+            print(f"[DEBUG] Prompt: {prompt[:80]}...")
+            print(f"[DEBUG] Input IDs shape: {inputs['input_ids'].shape}")
+            print(f"[DEBUG] Last 10 input tokens: {inputs['input_ids'][0, -10:].tolist()}")
+            print(f"[DEBUG] Last 10 decoded: '{processor.tokenizer.decode(inputs['input_ids'][0, -10:])}'")
 
         # CRITICAL: Add special empty token (29871) if not present
         # This is required to match training-time inputs!
@@ -151,6 +162,8 @@ def main():
                     inputs['attention_mask'],
                     torch.ones((1, 1), device=device, dtype=inputs['attention_mask'].dtype)
                 ], dim=1)
+            if i == 0:
+                print(f"[DEBUG] Added token 29871, new last tokens: {inputs['input_ids'][0, -5:].tolist()}")
 
         # Generate
         with torch.no_grad():
@@ -160,6 +173,13 @@ def main():
                 do_sample=False,
                 pad_token_id=processor.tokenizer.pad_token_id,
             )
+
+        if i == 0:
+            print(f"[DEBUG] Full output shape: {outputs.shape}")
+            print(f"[DEBUG] Full output tokens: {outputs[0].tolist()}")
+            input_len = inputs['input_ids'].shape[1]
+            print(f"[DEBUG] Input length: {input_len}")
+            print(f"[DEBUG] Generated tokens (after input): {outputs[0, input_len:].tolist()}")
 
         # Extract action tokens (last 7 tokens)
         action_tokens = outputs[0, -7:]
