@@ -131,25 +131,38 @@ def main():
         image = sample['image']
         expected_action = sample['action']
 
-        # Format prompt - try OpenVLA's exact format
-        prompt = f"In: What action should the robot take to {instruction}?\nOut:"
+        # Format prompt - OpenVLA's exact format
+        prompt = f"In: What action should the robot take to {instruction.lower()}?\nOut:"
 
         # Process
         inputs = processor(prompt, image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
+        # CRITICAL: Add special empty token (29871) if not present
+        # This is required to match training-time inputs!
+        input_ids = inputs['input_ids']
+        if input_ids[0, -1] != 29871:
+            empty_token = torch.tensor([[29871]], device=device)
+            input_ids = torch.cat([input_ids, empty_token], dim=1)
+            inputs['input_ids'] = input_ids
+            # Also extend attention mask if present
+            if 'attention_mask' in inputs:
+                inputs['attention_mask'] = torch.cat([
+                    inputs['attention_mask'],
+                    torch.ones((1, 1), device=device, dtype=inputs['attention_mask'].dtype)
+                ], dim=1)
+
         # Generate
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=8,
+                max_new_tokens=7,
                 do_sample=False,
                 pad_token_id=processor.tokenizer.pad_token_id,
             )
 
-        # Extract action tokens
-        input_len = inputs['input_ids'].shape[1]
-        action_tokens = outputs[0, input_len:input_len + 7]
+        # Extract action tokens (last 7 tokens)
+        action_tokens = outputs[0, -7:]
         decoded_action = tokenizer.decode(action_tokens)
 
         # Compute L1 error
