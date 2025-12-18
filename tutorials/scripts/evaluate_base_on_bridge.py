@@ -179,7 +179,10 @@ def main():
 
         # Process
         inputs = processor(prompt, image, return_tensors="pt")
+        # Move to device and convert pixel_values to bfloat16 to match model dtype
         inputs = {k: v.to(device) for k, v in inputs.items()}
+        if 'pixel_values' in inputs:
+            inputs['pixel_values'] = inputs['pixel_values'].to(torch.bfloat16)
 
         # Debug first sample
         if i == 0:
