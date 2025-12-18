@@ -81,9 +81,38 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
             if episodes_processed >= num_episodes:
                 break
 
+            # Debug: print episode-level keys on first episode
+            if episodes_processed == 0:
+                print(f"\n[DEBUG] Episode keys: {list(episode.keys())}")
+
             steps = list(episode['steps'])
             if len(steps) < 10:
                 continue
+
+            # Get episode-level language instruction FIRST
+            episode_instruction = None
+            if 'language_instruction' in episode:
+                lang_inst = episode['language_instruction']
+                if hasattr(lang_inst, 'numpy'):
+                    episode_instruction = lang_inst.numpy()
+                else:
+                    episode_instruction = lang_inst
+                if isinstance(episode_instruction, bytes):
+                    episode_instruction = episode_instruction.decode('utf-8')
+            # Also check in the first step (some datasets store it there)
+            if episode_instruction is None and len(steps) > 0:
+                first_step = steps[0]
+                if 'language_instruction' in first_step:
+                    lang_inst = first_step['language_instruction']
+                    if hasattr(lang_inst, 'numpy'):
+                        episode_instruction = lang_inst.numpy()
+                    else:
+                        episode_instruction = lang_inst
+                    if isinstance(episode_instruction, bytes):
+                        episode_instruction = episode_instruction.decode('utf-8')
+
+            if episodes_processed == 0:
+                print(f"[DEBUG] Episode instruction: {episode_instruction}")
 
             # Sample multiple frames from each episode
             n_steps = len(steps)
@@ -98,7 +127,7 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
 
                 # Debug: print structure on first sample
                 if len(samples) == 0:
-                    print(f"\n[DEBUG] Step keys: {step.keys()}")
+                    print(f"[DEBUG] Step keys: {step.keys()}")
                     print(f"[DEBUG] Observation keys: {step['observation'].keys()}")
                     if 'action' in step:
                         action_val = step['action']
@@ -163,17 +192,24 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                     else:
                         action = np.array(action_data)
 
-                # Get language instruction
-                lang_inst = step.get('language_instruction', None)
-                if lang_inst is not None:
-                    if hasattr(lang_inst, 'numpy'):
-                        instruction = lang_inst.numpy()
-                    else:
-                        instruction = lang_inst
-                    if isinstance(instruction, bytes):
-                        instruction = instruction.decode('utf-8')
+                # Get language instruction - prefer episode-level, then step-level
+                instruction = None
+                if episode_instruction:
+                    instruction = episode_instruction
                 else:
-                    # Try episode-level instruction
+                    lang_inst = step.get('language_instruction', None)
+                    if lang_inst is not None:
+                        if hasattr(lang_inst, 'numpy'):
+                            instruction = lang_inst.numpy()
+                        else:
+                            instruction = lang_inst
+                        if isinstance(instruction, bytes):
+                            instruction = instruction.decode('utf-8')
+
+                # Skip samples without real instructions
+                if not instruction or instruction == "":
+                    if len(samples) == 0:
+                        print(f"[WARN] No instruction found, using fallback")
                     instruction = "manipulate the object"
 
                 # Ensure action is 7-dim
@@ -182,6 +218,14 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                 else:
                     action = action[:7]
 
+                # Filter: prefer samples with non-trivial actions
+                action_magnitude = np.abs(action[:6]).max()  # Ignore gripper for this check
+                if action_magnitude < 0.01 and len(samples) < num_samples // 2:
+                    # For first half, skip near-zero actions to get diversity
+                    if len(samples) == 0:
+                        print(f"[DEBUG] Skipping near-zero action: max={action_magnitude:.6f}")
+                    continue
+
                 samples.append({
                     'image': image,  # Keep as numpy for serialization
                     'action': action.astype(np.float32),
@@ -189,6 +233,10 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                     'episode_idx': episodes_processed,
                     'step_idx': idx,
                 })
+
+                if len(samples) == 1:
+                    print(f"[DEBUG] First sample action: {action[:4]}...")
+                    print(f"[DEBUG] First sample instruction: {instruction[:50]}...")
 
             episodes_processed += 1
 
