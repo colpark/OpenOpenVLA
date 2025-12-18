@@ -299,7 +299,7 @@ def create_synthetic_test_data(n_samples=50):
 
 
 @torch.no_grad()
-def predict_action(model, processor, image, instruction, tokenizer, device="cuda:0"):
+def predict_action(model, processor, image, instruction, tokenizer, device="cuda:0", debug=False):
     """Run inference to predict action."""
     # Format prompt
     prompt = f"In: What action should the robot take to {instruction.lower()}?\nOut:"
@@ -323,8 +323,19 @@ def predict_action(model, processor, image, instruction, tokenizer, device="cuda
     input_len = inputs['input_ids'].shape[1]
     action_tokens = output[0, input_len:input_len + 7]
 
+    if debug:
+        print(f"\n[DEBUG] Instruction: {instruction[:50]}...")
+        print(f"[DEBUG] Generated token IDs: {action_tokens.tolist()}")
+        print(f"[DEBUG] Token range for actions: 31744-32000")
+        # Check if tokens are in action range
+        in_range = all(31744 <= t <= 32000 for t in action_tokens.tolist())
+        print(f"[DEBUG] Tokens in action range: {in_range}")
+
     # Decode to continuous actions
     predicted_action = tokenizer.decode(action_tokens)
+
+    if debug:
+        print(f"[DEBUG] Decoded actions: {predicted_action}")
 
     return predicted_action
 
@@ -420,14 +431,24 @@ def main():
     predictions = []
     ground_truths = []
 
-    for sample in tqdm(samples, desc="Evaluating"):
+    # Show debug info for first 3 samples
+    print("\n[DEBUG] First 3 samples:")
+    for i, sample in enumerate(samples[:3]):
+        print(f"\n--- Sample {i+1} ---")
+        print(f"Instruction: {sample['instruction']}")
+        print(f"GT action: {sample['action'][:7]}")
+
+    for i, sample in enumerate(tqdm(samples, desc="Evaluating")):
         try:
+            # Debug first 3 samples
+            debug = (i < 3)
             pred = predict_action(
                 model, processor,
                 sample['image'],
                 sample['instruction'],
                 tokenizer,
-                args.device
+                args.device,
+                debug=debug
             )
             gt = sample['action'][:7]  # Ensure 7 dims
 
