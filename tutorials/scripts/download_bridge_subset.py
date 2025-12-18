@@ -76,9 +76,13 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
 
         samples = []
         episodes_processed = 0
+        seen_instructions = set()  # Track unique instructions for diversity
 
-        for episode in tqdm(dataset, desc="Processing episodes", total=num_episodes):
-            if episodes_processed >= num_episodes:
+        # Process more episodes to ensure diversity (at least 2x what we need)
+        max_episodes = max(num_episodes * 3, num_samples)
+
+        for episode in tqdm(dataset, desc="Processing episodes", total=max_episodes):
+            if episodes_processed >= max_episodes or len(samples) >= num_samples:
                 break
 
             # Debug: print episode-level keys on first episode
@@ -114,10 +118,10 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
             if episodes_processed == 0:
                 print(f"[DEBUG] Episode instruction: {episode_instruction}")
 
-            # Sample multiple frames from each episode
+            # Sample only 1-2 frames per episode to ensure instruction diversity
             n_steps = len(steps)
-            # Get frames from beginning, middle, and end
-            indices = [0, n_steps // 4, n_steps // 2, 3 * n_steps // 4, n_steps - 1]
+            # Get frames from middle (most action) - limit per episode for diversity
+            indices = [n_steps // 3, 2 * n_steps // 3]  # Only 2 samples per episode
 
             for idx in indices:
                 if len(samples) >= num_samples:
@@ -248,6 +252,9 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                     'step_idx': idx,
                 })
 
+                # Track instruction diversity
+                seen_instructions.add(instruction)
+
                 if len(samples) == 1:
                     print(f"[DEBUG] First sample action: {action[:4]}...")
                     print(f"[DEBUG] First sample instruction: {instruction[:50]}...")
@@ -258,6 +265,10 @@ def download_bridge_subset(num_samples=50, num_episodes=20):
                 break
 
         print(f"\nDownloaded {len(samples)} samples from {episodes_processed} episodes")
+        print(f"Unique instructions: {len(seen_instructions)}")
+        if len(seen_instructions) <= 5:
+            for instr in seen_instructions:
+                print(f"  - {instr[:60]}...")
         return samples
 
     except Exception as e:
