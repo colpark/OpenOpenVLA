@@ -128,63 +128,79 @@ def load_model(checkpoint_path, device="cuda:0"):
 
 def load_bridge_data(data_dir, max_samples=100):
     """
-    Load Bridge V2 data samples.
-    Bridge V2 is part of OpenVLA's training data.
-
-    Expected format: RLDS/TFRecord or converted format
-    For simplicity, we'll download a small sample via HuggingFace datasets.
+    Load Bridge V2 data samples via tensorflow_datasets.
+    Bridge V2 is part of OpenVLA's original training data.
     """
-    print("Loading Bridge V2 data...")
+    print("Loading Bridge V2 data (OpenVLA training data)...")
 
     try:
-        from datasets import load_dataset
+        import tensorflow_datasets as tfds
 
-        # Load a small subset of Bridge V2 from HuggingFace
-        # This is the original training data format
-        dataset = load_dataset(
-            "jxu124/OpenX-Embodiment",
-            "bridge",
-            split="train",
-            streaming=True,
-            trust_remote_code=True,
+        # Load Bridge V2 from TFDS (this is how OpenVLA was trained)
+        # Bridge dataset is in RLDS format
+        builder = tfds.builder_from_directory(
+            builder_dir="gs://gresearch/robotics/bridge/0.1.0"
         )
+        dataset = builder.as_dataset(split="train")
 
         samples = []
-        for i, example in enumerate(tqdm(dataset, total=max_samples, desc="Loading Bridge samples")):
-            if i >= max_samples:
+        for i, episode in enumerate(tqdm(dataset, total=max_samples, desc="Loading Bridge episodes")):
+            if len(samples) >= max_samples:
                 break
 
-            # Extract image and action
-            # Bridge V2 format varies, handle common cases
-            if 'observation' in example and 'image' in example['observation']:
-                image = example['observation']['image']
-            elif 'image' in example:
-                image = example['image']
-            else:
-                continue
+            steps = list(episode['steps'])
+            # Sample a few frames from each episode
+            n_steps = len(steps)
+            indices = np.linspace(0, n_steps - 1, min(3, n_steps), dtype=int)
 
-            if 'action' in example:
-                action = np.array(example['action'])
-            else:
-                continue
+            for idx in indices:
+                if len(samples) >= max_samples:
+                    break
 
-            # Bridge V2 instruction (if available)
-            instruction = example.get('instruction', example.get('language_instruction',
-                "Pick up the object and place it in the target location."))
+                step = steps[idx]
+                image = step['observation']['image'].numpy()
+                action = step['action'].numpy()
+                instruction = step['language_instruction'].numpy().decode('utf-8')
 
-            samples.append({
-                'image': image,
-                'action': action,
-                'instruction': instruction,
-            })
+                samples.append({
+                    'image': Image.fromarray(image),
+                    'action': action,
+                    'instruction': instruction,
+                })
 
         print(f"Loaded {len(samples)} Bridge V2 samples")
         return samples
 
-    except Exception as e:
-        print(f"Could not load Bridge V2 from HuggingFace: {e}")
-        print("Falling back to synthetic test data...")
-        return create_synthetic_test_data(max_samples)
+    except Exception as e1:
+        print(f"Could not load Bridge V2 via TFDS: {e1}")
+        print("Trying alternative: downloading sample from OpenVLA repo...")
+
+        try:
+            # Alternative: Use a pre-cached sample from OpenVLA
+            import urllib.request
+            import tempfile
+            import pickle
+
+            # Check if we have cached bridge samples
+            cache_path = Path(f"{CACHE_DIR}/bridge_samples.pkl")
+            if cache_path.exists():
+                print(f"Loading cached Bridge samples from {cache_path}")
+                with open(cache_path, 'rb') as f:
+                    samples = pickle.load(f)
+                return samples[:max_samples]
+
+            # If no cache, create synthetic but realistic test data
+            print("Bridge V2 not available locally.")
+            print("To test on original training data, install tensorflow-datasets:")
+            print("  pip install tensorflow-datasets")
+            print("Then ensure you have GCS access for Bridge dataset.")
+            print("")
+            print("Falling back to LIBERO data for validation...")
+            return None  # Signal to use LIBERO instead
+
+        except Exception as e2:
+            print(f"Alternative loading also failed: {e2}")
+            return None
 
 
 def load_libero_data(data_dir, max_samples=100):
@@ -381,6 +397,10 @@ def main():
     # Load data
     if args.dataset == "bridge":
         samples = load_bridge_data(args.data_dir, args.max_samples)
+        if samples is None:
+            print("Bridge V2 unavailable - falling back to LIBERO")
+            args.dataset = "libero"
+            samples = load_libero_data(args.data_dir, args.max_samples)
     elif args.dataset == "libero":
         samples = load_libero_data(args.data_dir, args.max_samples)
     else:
