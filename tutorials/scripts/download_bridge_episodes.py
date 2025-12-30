@@ -47,11 +47,12 @@ def install_compatible_stack():
     print("  (This may take a few minutes)")
 
     # Install all at once to let pip resolve dependencies together
+    # Note: tensorflow-datasets 4.9.3 is max for Python 3.9
     packages = [
         "numpy>=1.23,<2",
         "protobuf>=3.20,<5",
         "tensorflow==2.15.1",
-        "tensorflow-datasets>=4.9.4",
+        "tensorflow-datasets>=4.8.0,<4.9.4",
         "gcsfs",
         "tqdm",
     ]
@@ -108,10 +109,15 @@ def check_tensorflow_stack():
     except ImportError:
         issues.append("Protobuf not installed")
 
-    # Check tensorflow-datasets
+    # Check tensorflow-datasets (4.8+ is fine for Bridge V2)
     try:
         import tensorflow_datasets
-        print(f"  TFDS: {tensorflow_datasets.__version__} (OK)")
+        tfds_version = tensorflow_datasets.__version__
+        tfds_minor = int(tfds_version.split('.')[1])
+        if tfds_minor < 8:
+            issues.append(f"tensorflow-datasets {tfds_version} (need >= 4.8)")
+        else:
+            print(f"  TFDS: {tfds_version} (OK)")
     except ImportError:
         issues.append("tensorflow-datasets not installed")
     except Exception:
