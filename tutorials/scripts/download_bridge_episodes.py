@@ -38,109 +38,93 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def check_numpy_version():
-    """Check and fix NumPy version (must be < 2.0 for TensorFlow compatibility)."""
+def install_compatible_stack():
+    """Install a compatible set of packages for TFDS/Bridge V2 access.
+
+    The key is to use TensorFlow 2.15.x which has fewer dependency conflicts.
+    """
+    print("Installing compatible TensorFlow stack...")
+    print("  (This may take a few minutes)")
+
+    # Install all at once to let pip resolve dependencies together
+    packages = [
+        "numpy>=1.23,<2",
+        "protobuf>=3.20,<5",
+        "tensorflow==2.15.1",
+        "tensorflow-datasets>=4.9.4",
+        "gcsfs",
+        "tqdm",
+    ]
+
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "-q", "--upgrade"
+    ] + packages)
+
+    print("[OK] Packages installed. Please restart the script.")
+    sys.exit(0)
+
+
+def check_tensorflow_stack():
+    """Check if TensorFlow stack is properly installed and compatible."""
+    print("Checking TensorFlow stack...")
+
+    issues = []
+
+    # Check NumPy
     try:
         import numpy as np
-        np_version = np.__version__
-        major = int(np_version.split('.')[0])
-
-        if major >= 2:
-            print(f"[WARNING] NumPy {np_version} detected - incompatible with TensorFlow/scipy")
-            print("Downgrading to NumPy 1.x...")
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-q",
-                "numpy<2"
-            ])
-            print("[OK] NumPy downgraded. Please restart the script.")
-            sys.exit(0)
+        np_major = int(np.__version__.split('.')[0])
+        if np_major >= 2:
+            issues.append(f"NumPy {np.__version__} (need < 2.0)")
         else:
-            print(f"  NumPy: {np_version} (OK)")
-        return True
+            print(f"  NumPy: {np.__version__} (OK)")
     except ImportError:
-        # NumPy not installed, will be installed with tensorflow
-        return True
+        issues.append("NumPy not installed")
 
-
-def check_and_fix_tensorflow():
-    """Check TensorFlow installation and fix version conflicts."""
-    print("Checking TensorFlow installation...")
-
+    # Check TensorFlow
     try:
         import tensorflow as tf
         tf_version = tf.__version__
-        print(f"  TensorFlow: {tf_version}")
-
-        # Check if it's an old version that conflicts with newer protobuf
         major, minor = map(int, tf_version.split('.')[:2])
-        if major == 2 and minor < 13:
-            print(f"\n[WARNING] TensorFlow {tf_version} may have protobuf conflicts")
-            print("Upgrading TensorFlow to 2.15.0 for compatibility...")
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-q",
-                "tensorflow>=2.15.0"
-            ])
-            print("[OK] TensorFlow upgraded. Please restart the script.")
-            sys.exit(0)
-
-        # TF 2.20+ requires protobuf >= 5.28
-        if major >= 2 and minor >= 20:
-            check_protobuf_for_tf220()
-
-        return True
-
-    except ImportError:
-        print("  TensorFlow not installed, installing...")
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "-q",
-            "tensorflow>=2.15.0"
-        ])
-        return True
-
-    except Exception as e:
-        if "protobuf" in str(e).lower() or "Descriptors cannot" in str(e):
-            print(f"\n[ERROR] TensorFlow/protobuf version conflict detected")
-            print("\nFix by running:")
-            print("  pip install --upgrade tensorflow>=2.15.0 protobuf")
-            print("\nOr downgrade protobuf:")
-            print("  pip install protobuf==3.20.3")
-            print("\nAttempting automatic fix...")
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-q",
-                "tensorflow>=2.15.0", "protobuf>=4.0.0"
-            ])
-            print("[OK] Packages updated. Please restart the script.")
-            sys.exit(0)
+        if major != 2 or minor < 13 or minor > 16:
+            issues.append(f"TensorFlow {tf_version} (recommend 2.15.x)")
         else:
-            raise
+            print(f"  TensorFlow: {tf_version} (OK)")
+    except ImportError:
+        issues.append("TensorFlow not installed")
+    except Exception as e:
+        # Protobuf or other import error
+        issues.append(f"TensorFlow import error: {type(e).__name__}")
 
-
-def check_protobuf_for_tf220():
-    """TensorFlow 2.20+ requires protobuf >= 5.28."""
+    # Check protobuf
     try:
         import google.protobuf
         pb_version = google.protobuf.__version__
-        major, minor = map(int, pb_version.split('.')[:2])
-        print(f"  Protobuf: {pb_version}")
-
-        if major < 5 or (major == 5 and minor < 28):
-            print(f"\n[WARNING] TensorFlow 2.20+ requires protobuf >= 5.28.0")
-            print(f"Current protobuf: {pb_version}")
-            print("Upgrading protobuf...")
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-q",
-                "protobuf>=5.28.0"
-            ])
-            print("[OK] Protobuf upgraded. Please restart the script.")
-            sys.exit(0)
+        pb_major = int(pb_version.split('.')[0])
+        if pb_major >= 5:
+            issues.append(f"Protobuf {pb_version} (need < 5.0 for TF 2.15)")
+        else:
+            print(f"  Protobuf: {pb_version} (OK)")
     except ImportError:
-        print("  Installing protobuf...")
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "-q",
-            "protobuf>=5.28.0"
-        ])
-        print("[OK] Protobuf installed. Please restart the script.")
-        sys.exit(0)
+        issues.append("Protobuf not installed")
+
+    # Check tensorflow-datasets
+    try:
+        import tensorflow_datasets
+        print(f"  TFDS: {tensorflow_datasets.__version__} (OK)")
+    except ImportError:
+        issues.append("tensorflow-datasets not installed")
+    except Exception:
+        issues.append("tensorflow-datasets import error")
+
+    if issues:
+        print(f"\n[ISSUES DETECTED]")
+        for issue in issues:
+            print(f"  - {issue}")
+        print("\nInstalling compatible package versions...")
+        install_compatible_stack()
+
+    return True
 
 
 def install_if_missing(package, min_version=None):
@@ -359,12 +343,9 @@ Examples:
 
         return episodes
 
-    # Check and fix dependencies (order matters!)
+    # Check and fix all dependencies together
     print("\nChecking dependencies...")
-    check_numpy_version()  # Must be NumPy < 2.0 for TF/scipy compatibility
-    check_and_fix_tensorflow()
-    install_if_missing("gcsfs")
-    install_if_missing("tensorflow_datasets")
+    check_tensorflow_stack()
 
     # Download
     episodes = download_bridge_episodes(
