@@ -191,21 +191,63 @@ class LIBEROFineTuneDataset(Dataset):
     """
 
     def __init__(self, data_dir, suite_name, processor, action_tokenizer,
-                 max_samples=None, image_size=224):
+                 max_samples=None, image_size=224, normalize_actions=True):
         self.data_dir = Path(data_dir)
         self.suite_name = suite_name
         self.processor = processor
         self.action_tokenizer = action_tokenizer
         self.image_size = image_size
+        self.normalize_actions = normalize_actions
 
         # Find HDF5 files
         self.hdf5_files = self._find_hdf5_files()
         if not self.hdf5_files:
             raise FileNotFoundError(f"No HDF5 files found in {data_dir}")
 
+        # Compute action statistics for normalization
+        if normalize_actions:
+            self.action_mean, self.action_std = self._compute_action_stats()
+            print(f"Action normalization: mean={self.action_mean}, std={self.action_std}")
+        else:
+            self.action_mean = np.zeros(7)
+            self.action_std = np.ones(7)
+
         # Build sample index
         self.samples = self._build_index(max_samples)
         print(f"Dataset: {len(self.samples)} samples from {len(self.hdf5_files)} files")
+
+    def _compute_action_stats(self):
+        """Compute mean and std of actions for normalization."""
+        all_actions = []
+        for filepath in self.hdf5_files[:10]:  # Sample from first 10 files
+            try:
+                with h5py.File(filepath, 'r') as f:
+                    if 'data' not in f:
+                        continue
+                    for demo_key in list(f['data'].keys())[:10]:
+                        if 'actions' in f['data'][demo_key]:
+                            actions = f['data'][demo_key]['actions'][:]
+                            all_actions.append(actions)
+            except Exception:
+                continue
+
+        if all_actions:
+            all_actions = np.concatenate(all_actions, axis=0)
+            # Ensure 7 dimensions
+            if all_actions.shape[1] < 7:
+                all_actions = np.pad(all_actions, ((0, 0), (0, 7 - all_actions.shape[1])))
+            else:
+                all_actions = all_actions[:, :7]
+            return all_actions.mean(axis=0), all_actions.std(axis=0) + 1e-6
+        return np.zeros(7), np.ones(7)
+
+    def normalize_action(self, action):
+        """Normalize action to roughly [-1, 1] range using z-score then tanh."""
+        # Z-score normalization
+        normalized = (action - self.action_mean) / self.action_std
+        # Soft clip to [-1, 1] using tanh (preserves gradients better than hard clip)
+        normalized = np.tanh(normalized / 3.0)  # Divide by 3 so most values stay linear
+        return normalized.astype(np.float32)
 
     def _find_hdf5_files(self):
         """Find all HDF5 files for this suite."""
@@ -329,8 +371,10 @@ class LIBEROFineTuneDataset(Dataset):
 
         # Tokenize action
         # IMPORTANT: Normalize action to [-1, 1] before tokenizing
-        # LIBERO actions are already roughly in this range, but clip to be safe
-        action_normalized = np.clip(action, -1.0, 1.0).astype(np.float32)
+        if self.normalize_actions:
+            action_normalized = self.normalize_action(action)
+        else:
+            action_normalized = np.clip(action, -1.0, 1.0).astype(np.float32)
         action_tokens = self.action_tokenizer.encode(action_normalized)
         action_tokens = torch.tensor(action_tokens, dtype=torch.long)
 
@@ -354,11 +398,11 @@ class LIBEROFineTuneDataset(Dataset):
 
 
 def collate_fn(batch, pad_token_id=0):
-    """Custom collate function with LEFT padding for decoder-only models."""
+    """Custom collate function with RIGHT padding (matching OpenVLA's design)."""
     # Find max length
     max_len = max(item['input_ids'].size(0) for item in batch)
 
-    # Pad sequences (LEFT padding for decoder-only architecture)
+    # Pad sequences (RIGHT padding - OpenVLA architecture requires this)
     padded_batch = {
         'input_ids': [],
         'attention_mask': [],
@@ -370,19 +414,19 @@ def collate_fn(batch, pad_token_id=0):
         seq_len = item['input_ids'].size(0)
         pad_len = max_len - seq_len
 
-        # LEFT pad input_ids with pad_token_id
+        # RIGHT pad input_ids with pad_token_id
         padded_batch['input_ids'].append(
-            torch.cat([torch.full((pad_len,), pad_token_id, dtype=torch.long), item['input_ids']])
+            torch.cat([item['input_ids'], torch.full((pad_len,), pad_token_id, dtype=torch.long)])
         )
 
-        # LEFT pad attention_mask with 0 (don't attend to padding)
+        # RIGHT pad attention_mask with 0 (don't attend to padding)
         padded_batch['attention_mask'].append(
-            torch.cat([torch.zeros(pad_len, dtype=torch.long), item['attention_mask']])
+            torch.cat([item['attention_mask'], torch.zeros(pad_len, dtype=torch.long)])
         )
 
-        # LEFT pad labels with -100 (ignore padding in loss)
+        # RIGHT pad labels with -100 (ignore padding in loss)
         padded_batch['labels'].append(
-            torch.cat([torch.full((pad_len,), -100, dtype=torch.long), item['labels']])
+            torch.cat([item['labels'], torch.full((pad_len,), -100, dtype=torch.long)])
         )
 
         # pixel_values don't need padding
@@ -566,10 +610,10 @@ def main():
                         help='Per-GPU batch size')
     parser.add_argument('--grad-accum', type=int, default=8,
                         help='Gradient accumulation steps (effective batch = batch_size * grad_accum)')
-    parser.add_argument('--lr', type=float, default=2e-5,
-                        help='Learning rate')
-    parser.add_argument('--lora-r', type=int, default=32,
-                        help='LoRA rank')
+    parser.add_argument('--lr', type=float, default=2e-4,
+                        help='Learning rate (official uses 5e-4, we use 2e-4 for stability)')
+    parser.add_argument('--lora-r', type=int, default=16,
+                        help='LoRA rank (16 better for small datasets like LIBERO)')
     parser.add_argument('--max-samples', type=int, default=None,
                         help='Max training samples (for debugging)')
     parser.add_argument('--resume', type=str, default=None,
@@ -600,6 +644,8 @@ def main():
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
     # Configuration
+    # NOTE: Learning rate 2e-4 is 10x higher than before (official uses 5e-4)
+    # LoRA dropout 0.1 for better regularization on small LIBERO dataset
     config = {
         'suite': args.suite,
         'epochs': args.epochs,
@@ -607,8 +653,8 @@ def main():
         'gradient_accumulation_steps': args.grad_accum,
         'learning_rate': args.lr,
         'lora_r': args.lora_r,
-        'lora_alpha': args.lora_r,  # Common to use same as r
-        'lora_dropout': 0.05,
+        'lora_alpha': args.lora_r * 2,  # Alpha = 2x rank for stronger updates
+        'lora_dropout': 0.1,  # Higher dropout for small dataset regularization
         'lora_target_modules': ["q_proj", "v_proj", "k_proj", "o_proj"],
         'warmup_ratio': 0.03,
         'weight_decay': 0.01,
@@ -638,8 +684,10 @@ def main():
         trust_remote_code=True,
         cache_dir=f"{CACHE_DIR}/huggingface",
     )
-    # Set left padding for decoder-only architecture (required for correct generation)
-    processor.tokenizer.padding_side = 'left'
+    # NOTE: OpenVLA is designed for RIGHT-padding (hardcoded in model architecture)
+    # The "right-padding detected" warning during generation is expected and can be ignored
+    # DO NOT change to left-padding - it breaks training
+    print(f"Tokenizer padding_side: {processor.tokenizer.padding_side}")
 
     # Enable gradient checkpointing for memory efficiency
     model.gradient_checkpointing_enable()
