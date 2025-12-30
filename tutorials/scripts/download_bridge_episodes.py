@@ -9,15 +9,17 @@ Usage:
     python download_bridge_episodes.py [--num-episodes 20] [--max-steps 50]
 
 Requirements:
-    pip install tensorflow tensorflow-datasets gcsfs tqdm
+    pip install tensorflow>=2.15.0 tensorflow-datasets gcsfs tqdm
+
+NOTE: If you have TensorFlow 2.9.x with newer protobuf, you'll hit version
+conflicts. This script will attempt to fix them automatically.
 """
 
 import os
 import sys
 import argparse
 import pickle
-import numpy as np
-from tqdm import tqdm
+import subprocess
 
 # =============================================================================
 # Configuration
@@ -36,15 +38,67 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def install_if_missing(package):
+def check_and_fix_tensorflow():
+    """Check TensorFlow installation and fix version conflicts."""
+    print("Checking TensorFlow installation...")
+
+    try:
+        import tensorflow as tf
+        tf_version = tf.__version__
+        print(f"  TensorFlow version: {tf_version}")
+
+        # Check if it's an old version that conflicts with newer protobuf
+        major, minor = map(int, tf_version.split('.')[:2])
+        if major == 2 and minor < 13:
+            print(f"\n[WARNING] TensorFlow {tf_version} may have protobuf conflicts")
+            print("Upgrading TensorFlow to 2.15.0 for compatibility...")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q",
+                "tensorflow>=2.15.0"
+            ])
+            print("[OK] TensorFlow upgraded. Please restart the script.")
+            sys.exit(0)
+        return True
+
+    except ImportError:
+        print("  TensorFlow not installed, installing...")
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-q",
+            "tensorflow>=2.15.0"
+        ])
+        return True
+
+    except Exception as e:
+        if "protobuf" in str(e).lower() or "Descriptors cannot" in str(e):
+            print(f"\n[ERROR] TensorFlow/protobuf version conflict detected")
+            print("\nFix by running:")
+            print("  pip install --upgrade tensorflow>=2.15.0 protobuf")
+            print("\nOr downgrade protobuf:")
+            print("  pip install protobuf==3.20.3")
+            print("\nAttempting automatic fix...")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q",
+                "tensorflow>=2.15.0", "protobuf>=4.0.0"
+            ])
+            print("[OK] Packages updated. Please restart the script.")
+            sys.exit(0)
+        else:
+            raise
+
+
+def install_if_missing(package, min_version=None):
     """Install package if not available."""
     try:
-        __import__(package)
+        mod = __import__(package)
+        if min_version and hasattr(mod, '__version__'):
+            # Simple version check
+            current = mod.__version__
+            print(f"  {package}: {current}")
         return True
     except ImportError:
-        print(f"Installing {package}...")
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", package])
+        spec = f"{package}>={min_version}" if min_version else package
+        print(f"Installing {spec}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", spec])
         return True
 
 
@@ -58,6 +112,8 @@ def download_bridge_episodes(num_episodes=20, max_steps_per_episode=50):
     Returns:
         List of episode dictionaries with frames, actions, instructions
     """
+    import numpy as np
+    from tqdm import tqdm
     import tensorflow_datasets as tfds
 
     print(f"\nDownloading {num_episodes} episodes from Bridge V2...")
@@ -246,10 +302,10 @@ Examples:
 
         return episodes
 
-    # Install dependencies
+    # Check and fix TensorFlow first (handles protobuf conflicts)
     print("\nChecking dependencies...")
+    check_and_fix_tensorflow()
     install_if_missing("gcsfs")
-    install_if_missing("tensorflow")
     install_if_missing("tensorflow_datasets")
 
     # Download
