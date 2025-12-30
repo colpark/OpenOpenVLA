@@ -727,6 +727,19 @@ def main():
     print(" Starting Training")
     print("=" * 60)
 
+    # Test validation before training to catch any issues early
+    print("\nRunning validation test (epoch 0)...")
+    try:
+        val_metrics = validate(model, val_loader, device, action_tokenizer)
+        print(f"  Validation test PASSED")
+        print(f"  Initial Val Loss: {val_metrics['loss']:.4f}")
+        print(f"  Initial Val L1 Error: {val_metrics['l1_error']:.4f}")
+    except Exception as e:
+        print(f"  Validation test FAILED: {e}")
+        print("  Fixing issue and continuing with loss-only validation...")
+        # If validation fails, we'll skip L1 error computation
+        raise
+
     best_val_loss = float('inf')
     global_step = 0
 
