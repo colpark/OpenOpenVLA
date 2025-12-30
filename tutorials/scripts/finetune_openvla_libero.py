@@ -27,6 +27,7 @@ import json
 import pickle
 from pathlib import Path
 from datetime import datetime
+from functools import partial
 
 import numpy as np
 import torch
@@ -352,12 +353,12 @@ class LIBEROFineTuneDataset(Dataset):
         return inputs
 
 
-def collate_fn(batch):
-    """Custom collate function for variable-length sequences."""
+def collate_fn(batch, pad_token_id=0):
+    """Custom collate function with LEFT padding for decoder-only models."""
     # Find max length
     max_len = max(item['input_ids'].size(0) for item in batch)
 
-    # Pad sequences
+    # Pad sequences (LEFT padding for decoder-only architecture)
     padded_batch = {
         'input_ids': [],
         'attention_mask': [],
@@ -369,19 +370,19 @@ def collate_fn(batch):
         seq_len = item['input_ids'].size(0)
         pad_len = max_len - seq_len
 
-        # Pad input_ids with pad_token_id (assuming 0)
+        # LEFT pad input_ids with pad_token_id
         padded_batch['input_ids'].append(
-            torch.cat([item['input_ids'], torch.zeros(pad_len, dtype=torch.long)])
+            torch.cat([torch.full((pad_len,), pad_token_id, dtype=torch.long), item['input_ids']])
         )
 
-        # Pad attention_mask with 0
+        # LEFT pad attention_mask with 0 (don't attend to padding)
         padded_batch['attention_mask'].append(
-            torch.cat([item['attention_mask'], torch.zeros(pad_len, dtype=torch.long)])
+            torch.cat([torch.zeros(pad_len, dtype=torch.long), item['attention_mask']])
         )
 
-        # Pad labels with -100
+        # LEFT pad labels with -100 (ignore padding in loss)
         padded_batch['labels'].append(
-            torch.cat([item['labels'], torch.full((pad_len,), -100, dtype=torch.long)])
+            torch.cat([torch.full((pad_len,), -100, dtype=torch.long), item['labels']])
         )
 
         # pixel_values don't need padding
@@ -663,6 +664,31 @@ def main():
         max_samples=args.max_samples,
     )
 
+    # Verify action statistics from raw data (before tokenization)
+    print("\nVerifying LIBERO action statistics...")
+    all_actions = []
+    for filepath in full_dataset.hdf5_files[:3]:  # Sample first 3 files
+        with h5py.File(filepath, 'r') as f:
+            if 'data' not in f:
+                continue
+            for demo_key in list(f['data'].keys())[:5]:  # Sample 5 demos
+                if 'actions' in f['data'][demo_key]:
+                    actions = f['data'][demo_key]['actions'][:]
+                    all_actions.append(actions)
+    if all_actions:
+        all_actions = np.concatenate(all_actions, axis=0)
+        print(f"  Raw action shape: {all_actions.shape}")
+        print(f"  Action min: {all_actions.min(axis=0)}")
+        print(f"  Action max: {all_actions.max(axis=0)}")
+        print(f"  Action mean: {all_actions.mean(axis=0)}")
+        print(f"  Action std: {all_actions.std(axis=0)}")
+
+        # Check if actions need normalization
+        if all_actions.min() < -1.5 or all_actions.max() > 1.5:
+            print("\n  ⚠️  WARNING: Actions may need normalization! Values outside [-1, 1]")
+        else:
+            print("\n  ✓ Actions appear to be in reasonable range for [-1, 1] clipping")
+
     # Split into train/val
     n_val = int(len(full_dataset) * args.val_split)
     n_train = len(full_dataset) - n_val
@@ -672,8 +698,17 @@ def main():
         generator=torch.Generator().manual_seed(42)
     )
 
-    print(f"Train samples: {len(train_dataset)}")
+    print(f"\nTrain samples: {len(train_dataset)}")
     print(f"Val samples: {len(val_dataset)}")
+
+    # Get pad_token_id from processor
+    pad_token_id = processor.tokenizer.pad_token_id
+    if pad_token_id is None:
+        pad_token_id = processor.tokenizer.eos_token_id
+    print(f"Pad token ID: {pad_token_id}")
+
+    # Create collate function with proper pad_token_id
+    collate_with_pad = partial(collate_fn, pad_token_id=pad_token_id)
 
     # Create dataloaders
     train_loader = DataLoader(
@@ -682,7 +717,7 @@ def main():
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_with_pad,
     )
 
     val_loader = DataLoader(
@@ -691,8 +726,28 @@ def main():
         shuffle=False,
         num_workers=4,
         pin_memory=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_with_pad,
     )
+
+    # Verify a sample batch
+    print("\nVerifying sample batch...")
+    sample_batch = next(iter(train_loader))
+    print(f"  input_ids shape: {sample_batch['input_ids'].shape}")
+    print(f"  attention_mask shape: {sample_batch['attention_mask'].shape}")
+    print(f"  labels shape: {sample_batch['labels'].shape}")
+    print(f"  pixel_values shape: {sample_batch['pixel_values'].shape}")
+
+    # Check labels
+    labels_sample = sample_batch['labels'][0]
+    non_ignore = labels_sample[labels_sample != -100]
+    print(f"  Non-ignored labels count: {len(non_ignore)} (should be 7 action tokens)")
+    if len(non_ignore) > 0:
+        print(f"  Action token IDs: {non_ignore.tolist()}")
+        print(f"  Token range check: [{non_ignore.min().item()}, {non_ignore.max().item()}]")
+        if non_ignore.min() >= action_tokenizer.action_token_start and non_ignore.max() <= action_tokenizer.action_token_end:
+            print("  ✓ Action tokens in valid range")
+        else:
+            print("  ⚠️  WARNING: Action tokens outside expected range!")
 
     # Optimizer and scheduler
     optimizer = torch.optim.AdamW(
