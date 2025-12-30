@@ -38,6 +38,30 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+def check_numpy_version():
+    """Check and fix NumPy version (must be < 2.0 for TensorFlow compatibility)."""
+    try:
+        import numpy as np
+        np_version = np.__version__
+        major = int(np_version.split('.')[0])
+
+        if major >= 2:
+            print(f"[WARNING] NumPy {np_version} detected - incompatible with TensorFlow/scipy")
+            print("Downgrading to NumPy 1.x...")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q",
+                "numpy<2"
+            ])
+            print("[OK] NumPy downgraded. Please restart the script.")
+            sys.exit(0)
+        else:
+            print(f"  NumPy: {np_version} (OK)")
+        return True
+    except ImportError:
+        # NumPy not installed, will be installed with tensorflow
+        return True
+
+
 def check_and_fix_tensorflow():
     """Check TensorFlow installation and fix version conflicts."""
     print("Checking TensorFlow installation...")
@@ -45,7 +69,7 @@ def check_and_fix_tensorflow():
     try:
         import tensorflow as tf
         tf_version = tf.__version__
-        print(f"  TensorFlow version: {tf_version}")
+        print(f"  TensorFlow: {tf_version}")
 
         # Check if it's an old version that conflicts with newer protobuf
         major, minor = map(int, tf_version.split('.')[:2])
@@ -302,8 +326,9 @@ Examples:
 
         return episodes
 
-    # Check and fix TensorFlow first (handles protobuf conflicts)
+    # Check and fix dependencies (order matters!)
     print("\nChecking dependencies...")
+    check_numpy_version()  # Must be NumPy < 2.0 for TF/scipy compatibility
     check_and_fix_tensorflow()
     install_if_missing("gcsfs")
     install_if_missing("tensorflow_datasets")
