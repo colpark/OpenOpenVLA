@@ -637,6 +637,8 @@ def main():
         trust_remote_code=True,
         cache_dir=f"{CACHE_DIR}/huggingface",
     )
+    # Set left padding for decoder-only architecture (required for correct generation)
+    processor.tokenizer.padding_side = 'left'
 
     # Enable gradient checkpointing for memory efficiency
     model.gradient_checkpointing_enable()
