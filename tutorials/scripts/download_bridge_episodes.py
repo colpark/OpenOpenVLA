@@ -82,6 +82,11 @@ def check_and_fix_tensorflow():
             ])
             print("[OK] TensorFlow upgraded. Please restart the script.")
             sys.exit(0)
+
+        # TF 2.20+ requires protobuf >= 5.28
+        if major >= 2 and minor >= 20:
+            check_protobuf_for_tf220()
+
         return True
 
     except ImportError:
@@ -108,6 +113,34 @@ def check_and_fix_tensorflow():
             sys.exit(0)
         else:
             raise
+
+
+def check_protobuf_for_tf220():
+    """TensorFlow 2.20+ requires protobuf >= 5.28."""
+    try:
+        import google.protobuf
+        pb_version = google.protobuf.__version__
+        major, minor = map(int, pb_version.split('.')[:2])
+        print(f"  Protobuf: {pb_version}")
+
+        if major < 5 or (major == 5 and minor < 28):
+            print(f"\n[WARNING] TensorFlow 2.20+ requires protobuf >= 5.28.0")
+            print(f"Current protobuf: {pb_version}")
+            print("Upgrading protobuf...")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q",
+                "protobuf>=5.28.0"
+            ])
+            print("[OK] Protobuf upgraded. Please restart the script.")
+            sys.exit(0)
+    except ImportError:
+        print("  Installing protobuf...")
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-q",
+            "protobuf>=5.28.0"
+        ])
+        print("[OK] Protobuf installed. Please restart the script.")
+        sys.exit(0)
 
 
 def install_if_missing(package, min_version=None):
