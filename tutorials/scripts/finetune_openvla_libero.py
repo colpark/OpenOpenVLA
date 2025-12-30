@@ -486,31 +486,45 @@ def validate(model, dataloader, device, action_tokenizer):
             )
             total_loss += outputs.loss.item()
 
-            # Get predictions for the action tokens
-            # Find where labels != -100
-            for i in range(len(batch['input_ids'])):
-                label_mask = labels[i] != -100
-                if label_mask.sum() == 0:
-                    continue
+            # For L1 error, use generate() to get actual predictions
+            # This is more accurate but slower, so sample occasionally
+            if num_samples < 50:  # Limit samples for speed
+                for i in range(min(2, len(batch['input_ids']))):  # 2 samples per batch
+                    # Find action token positions in labels
+                    label_mask = labels[i] != -100
+                    if label_mask.sum() == 0:
+                        continue
 
-                # Get logits for action positions
-                action_logits = outputs.logits[i, label_mask]
-                predicted_tokens = action_logits.argmax(dim=-1)
+                    gt_tokens = labels[i, label_mask].cpu().numpy()
 
-                # Get ground truth
-                gt_tokens = labels[i, label_mask]
+                    # Generate predictions
+                    try:
+                        gen_outputs = model.generate(
+                            input_ids=input_ids[i:i+1],
+                            attention_mask=attention_mask[i:i+1],
+                            pixel_values=pixel_values[i:i+1],
+                            max_new_tokens=7,
+                            do_sample=False,
+                            pad_token_id=model.config.pad_token_id,
+                        )
 
-                # Decode to continuous actions
-                pred_action = action_tokenizer.decode(predicted_tokens)
-                gt_action = action_tokenizer.decode(gt_tokens)
+                        # Extract generated action tokens (last 7 tokens)
+                        pred_tokens = gen_outputs[0, -7:].cpu().numpy()
 
-                # Compute L1 error
-                l1_error = np.abs(pred_action - gt_action).mean()
-                total_l1_error += l1_error
-                num_samples += 1
+                        # Decode to continuous actions
+                        pred_action = action_tokenizer.decode(pred_tokens)
+                        gt_action = action_tokenizer.decode(gt_tokens[:7])
+
+                        # Compute L1 error
+                        l1_error = np.abs(pred_action - gt_action).mean()
+                        total_l1_error += l1_error
+                        num_samples += 1
+                    except Exception as e:
+                        # Skip if generation fails
+                        continue
 
     avg_loss = total_loss / len(dataloader)
-    avg_l1_error = total_l1_error / num_samples if num_samples > 0 else 0
+    avg_l1_error = total_l1_error / num_samples if num_samples > 0 else float('inf')
 
     return {
         'loss': avg_loss,
