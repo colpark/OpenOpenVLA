@@ -633,8 +633,8 @@ def main():
         'gradient_accumulation_steps': args.grad_accum,
         'learning_rate': args.lr,
         'lora_r': args.lora_r,
-        'lora_alpha': args.lora_r * 2,  # Alpha = 2x rank for stronger updates
-        'lora_dropout': 0.1,  # Higher dropout for small dataset regularization
+        'lora_alpha': min(args.lora_r, 16),  # Official formula: alpha capped at 16
+        'lora_dropout': 0.0,  # Official uses 0.0 (no dropout)
         'lora_target_modules': ["q_proj", "v_proj", "k_proj", "o_proj"],
         'warmup_ratio': 0.03,
         'weight_decay': 0.01,
@@ -668,6 +668,8 @@ def main():
     # The "right-padding detected" warning during generation is expected and can be ignored
     # DO NOT change to left-padding - it breaks training
     print(f"Tokenizer padding_side: {processor.tokenizer.padding_side}")
+    assert processor.tokenizer.padding_side == "right", \
+        f"OpenVLA requires RIGHT padding, but got '{processor.tokenizer.padding_side}'!"
 
     # Enable gradient checkpointing for memory efficiency
     model.gradient_checkpointing_enable()
