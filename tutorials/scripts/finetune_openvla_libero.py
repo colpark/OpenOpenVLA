@@ -191,63 +191,46 @@ class LIBEROFineTuneDataset(Dataset):
     """
 
     def __init__(self, data_dir, suite_name, processor, action_tokenizer,
-                 max_samples=None, image_size=224, normalize_actions=True):
+                 max_samples=None, image_size=224):
         self.data_dir = Path(data_dir)
         self.suite_name = suite_name
         self.processor = processor
         self.action_tokenizer = action_tokenizer
         self.image_size = image_size
-        self.normalize_actions = normalize_actions
 
         # Find HDF5 files
         self.hdf5_files = self._find_hdf5_files()
         if not self.hdf5_files:
             raise FileNotFoundError(f"No HDF5 files found in {data_dir}")
 
-        # Compute action statistics for normalization
-        if normalize_actions:
-            self.action_mean, self.action_std = self._compute_action_stats()
-            print(f"Action normalization: mean={self.action_mean}, std={self.action_std}")
-        else:
-            self.action_mean = np.zeros(7)
-            self.action_std = np.ones(7)
-
         # Build sample index
         self.samples = self._build_index(max_samples)
         print(f"Dataset: {len(self.samples)} samples from {len(self.hdf5_files)} files")
 
-    def _compute_action_stats(self):
-        """Compute mean and std of actions for normalization."""
-        all_actions = []
-        for filepath in self.hdf5_files[:10]:  # Sample from first 10 files
-            try:
-                with h5py.File(filepath, 'r') as f:
-                    if 'data' not in f:
-                        continue
-                    for demo_key in list(f['data'].keys())[:10]:
-                        if 'actions' in f['data'][demo_key]:
-                            actions = f['data'][demo_key]['actions'][:]
-                            all_actions.append(actions)
-            except Exception:
-                continue
+    def transform_action(self, action):
+        """
+        Transform LIBERO action to match official OpenVLA preprocessing.
 
-        if all_actions:
-            all_actions = np.concatenate(all_actions, axis=0)
-            # Ensure 7 dimensions
-            if all_actions.shape[1] < 7:
-                all_actions = np.pad(all_actions, ((0, 0), (0, 7 - all_actions.shape[1])))
-            else:
-                all_actions = all_actions[:, :7]
-            return all_actions.mean(axis=0), all_actions.std(axis=0) + 1e-6
-        return np.zeros(7), np.ones(7)
+        Official LIBERO transform (from prismatic/vla/datasets/rlds/oxe/transforms.py):
+        - Position/rotation (dims 0-5): Used as-is, clipped to [-1, 1]
+        - Gripper (dim 6): clip to [0, 1] then invert (1 - action)
 
-    def normalize_action(self, action):
-        """Normalize action to roughly [-1, 1] range using z-score then tanh."""
-        # Z-score normalization
-        normalized = (action - self.action_mean) / self.action_std
-        # Soft clip to [-1, 1] using tanh (preserves gradients better than hard clip)
-        normalized = np.tanh(normalized / 3.0)  # Divide by 3 so most values stay linear
-        return normalized.astype(np.float32)
+        LIBERO raw gripper: -1 = open, +1 = close
+        After transform: +1 = open, 0 = close (matches OpenVLA convention)
+        """
+        action = action.astype(np.float32)
+
+        # Position and rotation (dims 0-5): just clip to [-1, 1]
+        action[:6] = np.clip(action[:6], -1.0, 1.0)
+
+        # Gripper (dim 6): clip to [0, 1] then invert
+        # Raw: -1 (open) to +1 (close)
+        # After clip: 0 (open) to 1 (close)
+        # After invert: 1 (open) to 0 (close) - matches OpenVLA convention
+        gripper = np.clip(action[6], 0.0, 1.0)
+        action[6] = 1.0 - gripper
+
+        return action
 
     def _find_hdf5_files(self):
         """Find all HDF5 files for this suite."""
@@ -369,13 +352,10 @@ class LIBEROFineTuneDataset(Dataset):
         inputs = self.processor(prompt, pil_image, return_tensors="pt")
         inputs = {k: v.squeeze(0) for k, v in inputs.items()}
 
-        # Tokenize action
-        # IMPORTANT: Normalize action to [-1, 1] before tokenizing
-        if self.normalize_actions:
-            action_normalized = self.normalize_action(action)
-        else:
-            action_normalized = np.clip(action, -1.0, 1.0).astype(np.float32)
-        action_tokens = self.action_tokenizer.encode(action_normalized)
+        # Transform action using official LIBERO preprocessing
+        # This matches OpenVLA's expected action format
+        action_transformed = self.transform_action(action)
+        action_tokens = self.action_tokenizer.encode(action_transformed)
         action_tokens = torch.tensor(action_tokens, dtype=torch.long)
 
         # Append action tokens to input_ids
@@ -725,17 +705,28 @@ def main():
                     all_actions.append(actions)
     if all_actions:
         all_actions = np.concatenate(all_actions, axis=0)
-        print(f"  Raw action shape: {all_actions.shape}")
-        print(f"  Action min: {all_actions.min(axis=0)}")
-        print(f"  Action max: {all_actions.max(axis=0)}")
-        print(f"  Action mean: {all_actions.mean(axis=0)}")
-        print(f"  Action std: {all_actions.std(axis=0)}")
-
-        # Check if actions need normalization
-        if all_actions.min() < -1.5 or all_actions.max() > 1.5:
-            print("\n  ⚠️  WARNING: Actions may need normalization! Values outside [-1, 1]")
+        # Ensure 7 dimensions for analysis
+        if all_actions.shape[1] < 7:
+            all_actions = np.pad(all_actions, ((0, 0), (0, 7 - all_actions.shape[1])))
         else:
-            print("\n  ✓ Actions appear to be in reasonable range for [-1, 1] clipping")
+            all_actions = all_actions[:, :7]
+
+        print(f"  Raw action shape: {all_actions.shape}")
+        print(f"  Raw action min: {all_actions.min(axis=0)}")
+        print(f"  Raw action max: {all_actions.max(axis=0)}")
+        print(f"  Raw action mean: {all_actions.mean(axis=0)}")
+
+        # Show transformed actions (after official LIBERO transform)
+        print("\n  After official LIBERO transform (matching OpenVLA):")
+        transformed = []
+        for a in all_actions[:100]:  # Sample 100
+            transformed.append(full_dataset.transform_action(a.copy()))
+        transformed = np.array(transformed)
+        print(f"  Transformed min: {transformed.min(axis=0)}")
+        print(f"  Transformed max: {transformed.max(axis=0)}")
+        print(f"  Transformed mean: {transformed.mean(axis=0)}")
+        print(f"  Gripper: raw [{all_actions[:, 6].min():.3f}, {all_actions[:, 6].max():.3f}] → transformed [{transformed[:, 6].min():.3f}, {transformed[:, 6].max():.3f}]")
+        print("  ✓ Using official LIBERO transform (clip + invert gripper)")
 
     # Split into train/val
     n_val = int(len(full_dataset) * args.val_split)

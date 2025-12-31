@@ -157,16 +157,25 @@ task_file.hdf5
 ```
 actions[0:3]  = delta position (x, y, z)
 actions[3:6]  = delta rotation (roll, pitch, yaw)
-actions[6]    = gripper command (-1=close, 1=open)
+actions[6]    = gripper command
 ```
 
-**Expected Action Statistics**:
+**CRITICAL: LIBERO Action Transform** (must match OpenVLA exactly):
+```python
+# Position/rotation (dims 0-5): clip to [-1, 1]
+action[:6] = np.clip(action[:6], -1.0, 1.0)
+
+# Gripper (dim 6): clip to [0, 1] then INVERT
+# Raw LIBERO: -1 = open, +1 = close
+# After transform: +1 = open, 0 = close (OpenVLA convention)
+gripper = np.clip(action[6], 0.0, 1.0)
+action[6] = 1.0 - gripper
 ```
-Action dim 0 (dx):   mean ≈ 0.0,  std ≈ 0.01-0.05
-Action dim 1 (dy):   mean ≈ 0.0,  std ≈ 0.01-0.05
-Action dim 2 (dz):   mean ≈ 0.0,  std ≈ 0.01-0.05
-Action dim 3-5 (rot): mean ≈ 0.0, std ≈ 0.01-0.1
-Action dim 6 (grip): mean ≈ 0.0,  values in {-1, 1}
+
+**Expected Action Statistics** (after transform):
+```
+Action dim 0-5: values in [-1, 1]
+Action dim 6 (grip): values in [0, 1] (1=open, 0=close)
 ```
 
 ---
