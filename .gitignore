@@ -151,3 +151,9 @@ data/
 # Rollout videos and wandb logs
 rollouts/
 wandb/
+
+# In-house datasets (large files, not for version control)
+inhouse/
+
+# Claude documentation (project-specific)
+claudedocs/

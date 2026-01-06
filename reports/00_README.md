@@ -15,6 +15,7 @@
 | [03](03_bridge_v2_validation.md) | Bridge V2 Re-implementation | Pipeline validation on training distribution |
 | [04](04_libero_finetuning.md) | LIBERO Fine-tuning Results | LoRA fine-tuning, partial success, mode collapse |
 | [05](05_key_findings.md) | Key Findings and Lessons Learned | Technical discoveries, methodology insights |
+| [06](06_lerobot_inhouse_data.md) | LeRobot In-House Data Analysis | Trossen robot data, OpenVLA integration strategies |
 
 ---
 
