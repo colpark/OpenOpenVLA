@@ -16,6 +16,7 @@
 | [04](04_libero_finetuning.md) | LIBERO Fine-tuning Results | LoRA fine-tuning, partial success, mode collapse |
 | [05](05_key_findings.md) | Key Findings and Lessons Learned | Technical discoveries, methodology insights |
 | [06](06_lerobot_inhouse_data.md) | LeRobot In-House Data Analysis | Trossen robot data, OpenVLA integration strategies |
+| [07](07_lerobot_adaptation.md) | LeRobot to OpenVLA Adaptation | Data conversion pipeline, fine-tuning infrastructure |
 
 ---
 
@@ -28,12 +29,15 @@
 - Training loss convergence
 - L1 error improvement (28.7% reduction)
 - Gripper accuracy improvement (+6.8%)
+- LeRobot data conversion pipeline (30 Hz → 5 Hz temporal subsampling)
+- Action space adaptation (16-dim joint → 7-dim OpenVLA format)
 
 ### What Needs Further Work
 - Frame rate mismatch resolution (20 Hz LIBERO vs 3-5 Hz training data)
 - Direction accuracy recovery (mode collapse to near-zero predictions)
-- Real robot evaluation
+- Real robot evaluation on Trossen AI Mobile
 - Multi-task generalization testing
+- Forward kinematics implementation for proper EE delta conversion
 
 ---
 
